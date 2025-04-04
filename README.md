@@ -1,7 +1,3 @@
-Certainly! Below is the revised README, tailored specifically to your **Donkey Compiler** project that you are developing in C.
-
----
-
 # Donkey Compiler
 
 ## Overview
