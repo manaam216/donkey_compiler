@@ -5,7 +5,7 @@ BUILD_DIR ?= build
 TARGET ?= $(BUILD_DIR)/donkey
 SRC = src/main.c src/lexer.c src/parser.c src/codegen.c
 
-.PHONY: all clean sample
+.PHONY: all clean sample test
 
 all: $(TARGET)
 
@@ -17,6 +17,9 @@ $(TARGET): $(SRC) | $(BUILD_DIR)
 
 sample: $(TARGET)
 	$(TARGET) examples/sample.c build/sample.asm
+
+test:
+	sh scripts/test.sh
 
 clean:
 	rm -rf $(BUILD_DIR)
