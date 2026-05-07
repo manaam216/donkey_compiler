@@ -51,6 +51,21 @@ New-Item -ItemType Directory -Force build
 gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\lexer.c src\parser.c src\codegen.c
 ```
 
+## Test
+
+Run the project checks:
+
+```sh
+make test
+```
+
+The test script rebuilds the compiler, compiles every example in `examples/`,
+assembles the generated files, runs the produced executables, and checks their
+exit codes.
+
+CI runs the same `make test` flow on GitHub Actions using Windows plus MSYS2
+MINGW32, which matches the current `_main` assembly symbol convention.
+
 ## Run
 
 Compile the main example:
