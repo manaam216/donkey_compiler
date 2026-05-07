@@ -33,6 +33,8 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
             add_token(tokens, token_count, T_CLOSEPAREN, ")");
         } else if (c == ';') {
             add_token(tokens, token_count, T_SEMICOLON, ";");
+        } else if (c == ',') {
+            add_token(tokens, token_count, T_COMMA, ",");
         } else if (c == '-') {
             add_token(tokens, token_count, T_MINUS, "-");
         } else if (c == '~') {

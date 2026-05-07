@@ -4,84 +4,190 @@
 #include "defs.h"
 #include "decl.h"
 
-static char *variables[256];
-static int variable_count = 0;
+static struct {
+    char *name;
+    int offset;
+} symbols[256];
+static int symbol_count = 0;
+static int local_stack_count = 0;
 static int label_count = 0;
+static int current_function_end_label = 0;
 
-static int has_variable(const char *name)
+static int find_local(const char *name)
 {
-    for (int i = 0; i < variable_count; i++) {
-        if (strcmp(variables[i], name) == 0) {
-            return 1;
+    for (int i = 0; i < symbol_count; i++) {
+        if (strcmp(symbols[i].name, name) == 0) {
+            return i;
         }
     }
 
-    return 0;
+    return -1;
 }
 
-static void add_variable(const char *name)
+static int local_offset(const char *name)
 {
-    if (!name || has_variable(name)) {
-        return;
-    }
-
-    if (variable_count >= 256) {
-        fprintf(stderr, "Too many identifiers in expression\n");
+    int index = find_local(name);
+    if (index < 0) {
+        fprintf(stderr, "Use of undeclared identifier '%s'\n", name);
         exit(1);
     }
 
-    variables[variable_count++] = strdup(name);
+    return symbols[index].offset;
 }
 
-static void collect_variables(struct ast_node *node)
+static void add_symbol(const char *name, int offset)
+{
+    if (!name) {
+        return;
+    }
+
+    if (find_local(name) >= 0) {
+        fprintf(stderr, "Redeclaration of local variable '%s'\n", name);
+        exit(1);
+    }
+
+    if (symbol_count >= 256) {
+        fprintf(stderr, "Too many local variables or parameters\n");
+        exit(1);
+    }
+
+    symbols[symbol_count].name = strdup(name);
+    symbols[symbol_count].offset = offset;
+    symbol_count++;
+}
+
+static void add_param(const char *name, int index)
+{
+    add_symbol(name, 8 + (index * 4));
+}
+
+static void add_local(const char *name)
+{
+    local_stack_count++;
+    add_symbol(name, -4 * local_stack_count);
+}
+
+static int collect_params(struct ast_node *node, int index)
+{
+    if (!node) {
+        return index;
+    }
+
+    if (node->type != AST_PARAM_LIST) {
+        fprintf(stderr, "Unsupported parameter node type: %d\n", node->type);
+        exit(1);
+    }
+
+    add_param(node->left->value, index);
+    return collect_params(node->right, index + 1);
+}
+
+static void collect_locals(struct ast_node *node)
 {
     if (!node) {
         return;
     }
 
-    if (node->type == AST_IDENTIFIER) {
-        add_variable(node->value);
+    if (node->type == AST_DECL) {
+        add_local(node->value);
     }
 
-    collect_variables(node->left);
-    collect_variables(node->right);
+    collect_locals(node->left);
+    collect_locals(node->right);
 }
 
-static void free_variables(void)
+static void free_locals(void)
 {
-    for (int i = 0; i < variable_count; i++) {
-        free(variables[i]);
-        variables[i] = NULL;
+    for (int i = 0; i < symbol_count; i++) {
+        free(symbols[i].name);
+        symbols[i].name = NULL;
+        symbols[i].offset = 0;
     }
-    variable_count = 0;
+    symbol_count = 0;
+    local_stack_count = 0;
 }
 
-static void generate_variable_storage(FILE *output)
+static void generate_epilogue(FILE *output)
 {
-    if (variable_count == 0) {
-        return;
-    }
-
-    fprintf(output, ".data\n");
-    for (int i = 0; i < variable_count; i++) {
-        fprintf(output, "_%s:\n", variables[i]);
-        fprintf(output, "    .long   0\n");
-    }
-    fprintf(output, ".text\n");
+    fprintf(output, "    leave\n");
+    fprintf(output, "    ret\n");
 }
 
 void generate_function(struct ast_node *node, FILE *output)
 {
+    collect_params(node->left, 0);
+    collect_locals(node->right);
+    current_function_end_label = label_count++;
+
     fprintf(output, ".globl _%s\n", node->value);
     fprintf(output, "_%s:\n", node->value);
-    generate_statement(node->left, output);
+    fprintf(output, "    push    %%ebp\n");
+    fprintf(output, "    movl    %%esp, %%ebp\n");
+    if (local_stack_count > 0) {
+        fprintf(output, "    subl    $%d, %%esp\n", local_stack_count * 4);
+    }
+    generate_statement(node->right, output);
+    fprintf(output, "    movl    $0, %%eax\n");
+    fprintf(output, ".L%d:\n", current_function_end_label);
+    generate_epilogue(output);
+    free_locals();
+}
+
+void generate_program(struct ast_node *node, FILE *output)
+{
+    if (!node) {
+        return;
+    }
+
+    switch (node->type) {
+        case AST_PROGRAM:
+            generate_program(node->left, output);
+            break;
+        case AST_FUNCTION_LIST:
+            generate_program(node->left, output);
+            generate_program(node->right, output);
+            break;
+        case AST_FUNCTION:
+            generate_function(node, output);
+            break;
+        default:
+            fprintf(stderr, "Unsupported program node type: %d\n", node->type);
+            exit(1);
+    }
 }
 
 void generate_statement(struct ast_node *node, FILE *output)
 {
-    if (node->type == AST_RETURN) {
-        generate_exp(node->left, output);
-        fprintf(output, "    ret\n");
+    if (!node) {
+        return;
+    }
+
+    switch (node->type) {
+        case AST_BLOCK:
+            generate_statement(node->left, output);
+            break;
+        case AST_STATEMENT_LIST:
+            generate_statement(node->left, output);
+            generate_statement(node->right, output);
+            break;
+        case AST_DECL:
+            if (node->left) {
+                generate_exp(node->left, output);
+                fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->value));
+            } else {
+                fprintf(output, "    movl    $0, %d(%%ebp)\n", local_offset(node->value));
+            }
+            break;
+        case AST_EXPR_STMT:
+            generate_exp(node->left, output);
+            break;
+        case AST_RETURN:
+            generate_exp(node->left, output);
+            fprintf(output, "    jmp     .L%d\n", current_function_end_label);
+            break;
+        default:
+            fprintf(stderr, "Unsupported statement node type: %d\n", node->type);
+            exit(1);
     }
 }
 
@@ -91,70 +197,70 @@ void generate_binop(struct ast_node *node, FILE *output)
     fprintf(output, "    push    %%eax\n");
 
     generate_exp(node->right, output);
-    fprintf(output, "    pop     %%ecx\n");
+    fprintf(output, "    pop     %%edx\n");
 
     switch (node->type) {
         case AST_ADD:
-            fprintf(output, "    addl    %%ecx, %%eax\n");
+            fprintf(output, "    addl    %%edx, %%eax\n");
             break;
         case AST_SUB:
-            fprintf(output, "    subl    %%eax, %%ecx\n");
-            fprintf(output, "    movl    %%ecx, %%eax\n");
+            fprintf(output, "    subl    %%eax, %%edx\n");
+            fprintf(output, "    movl    %%edx, %%eax\n");
             break;
         case AST_MUL:
-            fprintf(output, "    imull   %%ecx, %%eax\n");
+            fprintf(output, "    imull   %%edx, %%eax\n");
             break;
         case AST_DIV:
             fprintf(output, "    push    %%eax\n");
-            fprintf(output, "    movl    %%ecx, %%eax\n");
+            fprintf(output, "    movl    %%edx, %%eax\n");
             fprintf(output, "    pop     %%ecx\n");
             fprintf(output, "    cdq\n");
             fprintf(output, "    idivl   %%ecx\n");
             break;
         case AST_MOD:
             fprintf(output, "    push    %%eax\n");
-            fprintf(output, "    movl    %%ecx, %%eax\n");
+            fprintf(output, "    movl    %%edx, %%eax\n");
             fprintf(output, "    pop     %%ecx\n");
             fprintf(output, "    cdq\n");
             fprintf(output, "    idivl   %%ecx\n");
             fprintf(output, "    movl    %%edx, %%eax\n");
             break;
         case AST_BITWISE_AND:
-            fprintf(output, "    andl    %%ecx, %%eax\n");
+            fprintf(output, "    andl    %%edx, %%eax\n");
             break;
         case AST_BITWISE_OR:
-            fprintf(output, "    orl     %%ecx, %%eax\n");
+            fprintf(output, "    orl     %%edx, %%eax\n");
             break;
         case AST_BITWISE_XOR:
-            fprintf(output, "    xorl    %%ecx, %%eax\n");
+            fprintf(output, "    xorl    %%edx, %%eax\n");
             break;
         case AST_EQUAL:
-            fprintf(output, "    cmpl    %%eax, %%ecx\n");
+            fprintf(output, "    cmpl    %%eax, %%edx\n");
             fprintf(output, "    movl    $0, %%eax\n");
             fprintf(output, "    sete    %%al\n");
             break;
         case AST_NOT_EQUAL:
-            fprintf(output, "    cmpl    %%eax, %%ecx\n");
+            fprintf(output, "    cmpl    %%eax, %%edx\n");
             fprintf(output, "    movl    $0, %%eax\n");
             fprintf(output, "    setne   %%al\n");
             break;
         case AST_LESS:
-            fprintf(output, "    cmpl    %%eax, %%ecx\n");
+            fprintf(output, "    cmpl    %%eax, %%edx\n");
             fprintf(output, "    movl    $0, %%eax\n");
             fprintf(output, "    setl    %%al\n");
             break;
         case AST_LESS_EQUAL:
-            fprintf(output, "    cmpl    %%eax, %%ecx\n");
+            fprintf(output, "    cmpl    %%eax, %%edx\n");
             fprintf(output, "    movl    $0, %%eax\n");
             fprintf(output, "    setle   %%al\n");
             break;
         case AST_GREATER:
-            fprintf(output, "    cmpl    %%eax, %%ecx\n");
+            fprintf(output, "    cmpl    %%eax, %%edx\n");
             fprintf(output, "    movl    $0, %%eax\n");
             fprintf(output, "    setg    %%al\n");
             break;
         case AST_GREATER_EQUAL:
-            fprintf(output, "    cmpl    %%eax, %%ecx\n");
+            fprintf(output, "    cmpl    %%eax, %%edx\n");
             fprintf(output, "    movl    $0, %%eax\n");
             fprintf(output, "    setge   %%al\n");
             break;
@@ -171,8 +277,16 @@ void generate_exp(struct ast_node *node, FILE *output)
             fprintf(output, "    movl    $%s, %%eax\n", node->value);
             break;
         case AST_IDENTIFIER:
-            fprintf(output, "    movl    _%s, %%eax\n", node->value);
+            fprintf(output, "    movl    %d(%%ebp), %%eax\n", local_offset(node->value));
             break;
+        case AST_CALL: {
+            int arg_count = generate_call_args(node->left, output);
+            fprintf(output, "    call    _%s\n", node->value);
+            if (arg_count > 0) {
+                fprintf(output, "    addl    $%d, %%esp\n", arg_count * 4);
+            }
+            break;
+        }
         case AST_ADD:
         case AST_SUB:
         case AST_MUL:
@@ -225,7 +339,7 @@ void generate_exp(struct ast_node *node, FILE *output)
         }
         case AST_ASSIGN:
             generate_exp(node->right, output);
-            fprintf(output, "    movl    %%eax, _%s\n", node->left->value);
+            fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->left->value));
             break;
         case AST_NEGATION:
             generate_exp(node->left, output);
@@ -247,6 +361,24 @@ void generate_exp(struct ast_node *node, FILE *output)
     }
 }
 
+int generate_call_args(struct ast_node *node, FILE *output)
+{
+    if (!node) {
+        return 0;
+    }
+
+    if (node->type != AST_ARG_LIST) {
+        fprintf(stderr, "Unsupported argument node type: %d\n", node->type);
+        exit(1);
+    }
+
+    int count = generate_call_args(node->right, output);
+    generate_exp(node->left, output);
+    fprintf(output, "    push    %%eax\n");
+
+    return count + 1;
+}
+
 char* generate(struct ast_node *ast)
 {
     FILE *output = fopen("donkey_generate.tmp", "w+");
@@ -255,9 +387,7 @@ char* generate(struct ast_node *ast)
         exit(EXIT_FAILURE);
     }
 
-    collect_variables(ast);
-    generate_variable_storage(output);
-    generate_function(ast, output);
+    generate_program(ast, output);
     rewind(output);
     fseek(output, 0, SEEK_END);
     long size = ftell(output);
@@ -274,8 +404,6 @@ char* generate(struct ast_node *ast)
 
     fclose(output);
     remove("donkey_generate.tmp");
-    free_variables();
-
     return assembly;
 }
 
@@ -287,9 +415,6 @@ void write_assembly_to_file(const char *filename, struct ast_node *ast)
         exit(EXIT_FAILURE);
     }
 
-    collect_variables(ast);
-    generate_variable_storage(out_file);
-    generate_function(ast, out_file);
-    free_variables();
+    generate_program(ast, out_file);
     fclose(out_file);
 }
