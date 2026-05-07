@@ -24,6 +24,7 @@ jobs:
           update: true
           install: >-
             make
+            gawk
             mingw-w64-i686-gcc
 
       - name: Build

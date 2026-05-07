@@ -17,7 +17,26 @@ mkdir -p "$build_dir"
 "$compiler" examples/assignment.c "$build_dir/assignment.asm"
 "$compiler" examples/short_circuit.c "$build_dir/short_circuit.asm"
 
-cmp examples/sample.asm "$build_dir/sample.asm"
+awk '
+    NR == FNR {
+        expected[NR] = $0
+        expected_count = NR
+        next
+    }
+    {
+        actual_count = FNR
+        if ($0 != expected[FNR]) {
+            printf("sample.asm mismatch on line %d\nexpected: %s\nactual:   %s\n", FNR, expected[FNR], $0) > "/dev/stderr"
+            exit 1
+        }
+    }
+    END {
+        if (expected_count != actual_count) {
+            printf("sample.asm line count mismatch: expected %d, got %d\n", expected_count, actual_count) > "/dev/stderr"
+            exit 1
+        }
+    }
+' examples/sample.asm "$build_dir/sample.asm"
 
 "$cc" -x assembler "$build_dir/sample.asm" -o "$build_dir/sample.exe"
 "$cc" -x assembler "$build_dir/unary.asm" -o "$build_dir/unary.exe"
