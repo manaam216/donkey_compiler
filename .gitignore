@@ -1,1 +1,10 @@
 .vscode/*
+*.exe
+*.o
+donkey_generate.tmp
+test_output.asm
+/build/
+/donkey
+/donkey.exe
+/output.asm
+/sample_program.exe

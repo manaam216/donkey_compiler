@@ -1,141 +1,129 @@
 # Donkey Compiler
 
-## Overview
+Donkey is a small educational compiler written in C. It accepts a tiny C-like
+program, builds an abstract syntax tree, and emits 32-bit x86-style assembly for
+a single integer-returning function.
 
-**Donkey Compiler** is a simple C compiler written in C, which is capable of parsing C-like programs, generating an Abstract Syntax Tree (AST), and producing assembly code from the parsed expressions. It can handle basic arithmetic operations, unary operators, and generate assembly for functions with simple return statements.
+## Directory Layout
 
-The project is being developed step-by-step, starting from a lexer to parsing, followed by code generation. Currently, it handles basic expressions involving addition, subtraction, multiplication, and division.
+```text
+.
+├── include/          Public compiler headers
+│   ├── decl.h
+│   └── defs.h
+├── src/              Compiler implementation
+│   ├── main.c        CLI entry point
+│   ├── lexer.c       Tokenizer
+│   ├── parser.c      Recursive descent parser and AST allocation
+│   └── codegen.c     Assembly generator
+├── examples/         Source examples and reference assembly
+│   ├── sample.c
+│   ├── sample.asm
+│   └── unary.c
+├── build/            Generated binaries and assembly output
+└── Makefile
+```
 
-## Features
+`build/` is intentionally ignored by Git. Rebuild it whenever you need fresh
+artifacts.
 
-- **Lexical Analysis (Lexer):**
-  - Tokenizes input programs into a stream of tokens such as operators, literals, and identifiers.
+## Build
 
-- **Parsing:**
-  - Supports parsing of simple C-like functions, return statements, and basic expressions (arithmetic and unary operations).
-  
-- **Code Generation:**
-  - Generates assembly code for arithmetic expressions such as `e1 + e2`, `e1 - e2`, `e1 * e2`, and `e1 / e2`.
-  - Handles unary operators such as negation (`-`), bitwise complement (`~`), and logical negation (`!`).
+With `make`:
 
-## Build Steps
+```sh
+make
+```
 
-1. **Clone the repository:**
+The compiler binary is written to:
 
-   ```bash
-   git clone https://github.com/your-username/donkey-compiler.git
-   cd donkey-compiler
-   ```
+```text
+build/donkey
+```
 
-2. **Build the project:**
+On Windows with MinGW GCC and no `make`, run:
 
-   The project uses `Make` for building. To build the project, simply run:
+```powershell
+New-Item -ItemType Directory -Force build
+gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\lexer.c src\parser.c src\codegen.c
+```
 
-   ```bash
-   make
-   ```
+## Run
 
-3. **Run the compiler:**
+Compile the main example:
 
-   After building the project, you can use the compiled `donkey` executable to parse and compile a C-like input file.
+```sh
+./build/donkey examples/sample.c build/sample.asm
+```
 
-   ```bash
-   ./donkey input_file.c
-   ```
+On Windows:
 
-   This will parse the input C file, generate the corresponding assembly, and print it to the console.
+```powershell
+.\build\donkey.exe examples\sample.c build\sample.asm
+```
 
-## Input Syntax
+If you omit the output path, Donkey writes to `output.asm` in the current
+directory:
 
-The input to the **Donkey Compiler** is a simple C-like syntax that defines functions with basic arithmetic and unary operations.
+```sh
+./build/donkey examples/unary.c
+```
 
-### Supported Features:
-- **Function Definition:**
-  - Functions are defined with `int` as the return type, an identifier as the function name, and a return statement with an expression.
-  
-- **Supported Operations:**
-  - **Addition**: `+`
-  - **Subtraction**: `-`
-  - **Multiplication**: `*`
-  - **Division**: `/`
-  - **Unary negation**: `-`
-  - **Bitwise complement**: `~`
-  - **Logical negation**: `!`
+You can also build and run the sample target in one step:
 
-### Example Input:
+```sh
+make sample
+```
 
-**Example 1 (input_file.c):**
+## Language Support
+
+Donkey currently accepts one function in this form:
 
 ```c
-int add() {
-    return 1 + 2 * 3;
+int main()
+{
+    return 1 + 2 * (3 + 4) - !0;
 }
 ```
 
-**Example 2 (input_file.c):**
+Supported expression features:
 
-```c
-int negate() {
-    return -5;
-}
+- Integer literals
+- Parenthesized expressions
+- Unary negation: `-x`
+- Bitwise complement: `~x`
+- Logical negation: `!x`
+- Addition, subtraction, multiplication, and division
+- Standard precedence for `*` and `/` over `+` and `-`
+
+## Reference Output
+
+`examples/sample.asm` is the checked-in reference output for
+`examples/sample.c`. To regenerate it:
+
+```sh
+./build/donkey examples/sample.c examples/sample.asm
 ```
 
-## Output
+To assemble the generated file with GCC, force assembler mode because `.asm`
+is not always detected automatically:
 
-The **Donkey Compiler** will generate assembly code from the input C-like program. For example:
-
-### Example 1 (Assembly Output):
-
-```asm
-.globl _add
-_add:
-    movl    $1, %eax
-    push    %eax
-    movl    $2, %eax
-    imul    $3, %eax
-    pop     %ecx
-    addl    %ecx, %eax
-    ret
+```sh
+gcc -x assembler build/sample.asm -o build/sample
 ```
 
-### Example 2 (Assembly Output):
+## Clean
 
-```asm
-.globl _negate
-_negate:
-    movl    $5, %eax
-    negl    %eax
-    ret
+```sh
+make clean
 ```
 
-## How It Works
+This removes the `build/` directory.
 
-### 1. **Lexer (Tokenization):**
-The lexer processes the input file and converts the characters into tokens such as keywords, identifiers, operators, and literals.
+## Current Limitations
 
-### 2. **Parser (Syntax Analysis):**
-The parser takes the tokens from the lexer and builds an Abstract Syntax Tree (AST). This tree represents the structure of the program based on the grammar rules defined for functions, statements, and expressions.
-
-### 3. **Code Generation:**
-The code generation phase traverses the AST and converts it into assembly instructions. For example:
-- `1 + 2 * 3` is transformed into a series of assembly instructions that handle multiplication and addition.
-- Unary operations like `-5` are handled by generating the appropriate assembly instructions for negation.
-
-## File Structure
-
-- **`defs.h`**: Defines the data structures and constants used across the compiler.
-- **`decl.h`**: Contains function declarations for the AST and helper functions.
-- **`lex_tokenization.c`**: Handles the lexical analysis and tokenization of the input source code.
-- **`ast_algo_parser.c`**: Parses the tokenized input and generates an Abstract Syntax Tree (AST).
-- **`generate_asm.c`**: Converts the AST into assembly code.
-- **`main.c`**: The entry point of the compiler, responsible for driving the parsing and code generation.
-- **`input`** Test input file
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
-
-## Acknowledgements
-
-- The **Donkey Compiler** is a project designed to help learn about compiler construction, including lexing, parsing, and code generation.
-- Special thanks to all the compiler construction resources and tutorials that helped guide this project.
+- Only one function per input file
+- Only one `return` statement per function body
+- No variables, parameters, declarations, conditionals, or loops
+- Assembly output is for learning and demonstration, not a complete production
+  toolchain
