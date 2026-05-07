@@ -146,6 +146,9 @@ struct ast_node* parse_term(struct token *tokens, int *token_index)
         } else if (tok->type == T_SLASH) {
             (*token_index)++;
             left = create_ast_node(AST_DIV, NULL, left, parse_factor(tokens, token_index));
+        } else if (tok->type == T_PERCENT) {
+            (*token_index)++;
+            left = create_ast_node(AST_MOD, NULL, left, parse_factor(tokens, token_index));
         } else {
             break;
         }
@@ -155,6 +158,136 @@ struct ast_node* parse_term(struct token *tokens, int *token_index)
 }
 
 struct ast_node* parse_exp(struct token *tokens, int *token_index)
+{
+    return parse_assignment(tokens, token_index);
+}
+
+struct ast_node* parse_assignment(struct token *tokens, int *token_index)
+{
+    struct ast_node *left = parse_logical_or(tokens, token_index);
+
+    if (tokens[*token_index].type == T_ASSIGN) {
+        if (left->type != AST_IDENTIFIER) {
+            fprintf(stderr, "Left side of assignment must be an identifier\n");
+            exit(1);
+        }
+
+        (*token_index)++;
+        return create_ast_node(AST_ASSIGN, NULL, left, parse_assignment(tokens, token_index));
+    }
+
+    return left;
+}
+
+struct ast_node* parse_logical_or(struct token *tokens, int *token_index)
+{
+    struct ast_node *left = parse_logical_and(tokens, token_index);
+
+    while (tokens[*token_index].type == T_LOGICAL_OR) {
+        (*token_index)++;
+        left = create_ast_node(AST_LOGICAL_OR, NULL, left, parse_logical_and(tokens, token_index));
+    }
+
+    return left;
+}
+
+struct ast_node* parse_logical_and(struct token *tokens, int *token_index)
+{
+    struct ast_node *left = parse_bitwise_or(tokens, token_index);
+
+    while (tokens[*token_index].type == T_LOGICAL_AND) {
+        (*token_index)++;
+        left = create_ast_node(AST_LOGICAL_AND, NULL, left, parse_bitwise_or(tokens, token_index));
+    }
+
+    return left;
+}
+
+struct ast_node* parse_bitwise_or(struct token *tokens, int *token_index)
+{
+    struct ast_node *left = parse_bitwise_xor(tokens, token_index);
+
+    while (tokens[*token_index].type == T_PIPE) {
+        (*token_index)++;
+        left = create_ast_node(AST_BITWISE_OR, NULL, left, parse_bitwise_xor(tokens, token_index));
+    }
+
+    return left;
+}
+
+struct ast_node* parse_bitwise_xor(struct token *tokens, int *token_index)
+{
+    struct ast_node *left = parse_bitwise_and(tokens, token_index);
+
+    while (tokens[*token_index].type == T_CARET) {
+        (*token_index)++;
+        left = create_ast_node(AST_BITWISE_XOR, NULL, left, parse_bitwise_and(tokens, token_index));
+    }
+
+    return left;
+}
+
+struct ast_node* parse_bitwise_and(struct token *tokens, int *token_index)
+{
+    struct ast_node *left = parse_equality(tokens, token_index);
+
+    while (tokens[*token_index].type == T_AMPERSAND) {
+        (*token_index)++;
+        left = create_ast_node(AST_BITWISE_AND, NULL, left, parse_equality(tokens, token_index));
+    }
+
+    return left;
+}
+
+struct ast_node* parse_equality(struct token *tokens, int *token_index)
+{
+    struct ast_node *left = parse_relational(tokens, token_index);
+
+    while (1) {
+        struct token *tok = &tokens[*token_index];
+
+        if (tok->type == T_EQUAL) {
+            (*token_index)++;
+            left = create_ast_node(AST_EQUAL, NULL, left, parse_relational(tokens, token_index));
+        } else if (tok->type == T_NOT_EQUAL) {
+            (*token_index)++;
+            left = create_ast_node(AST_NOT_EQUAL, NULL, left, parse_relational(tokens, token_index));
+        } else {
+            break;
+        }
+    }
+
+    return left;
+}
+
+struct ast_node* parse_relational(struct token *tokens, int *token_index)
+{
+    struct ast_node *left = parse_additive(tokens, token_index);
+
+    while (1) {
+        struct token *tok = &tokens[*token_index];
+
+        if (tok->type == T_LESS) {
+            (*token_index)++;
+            left = create_ast_node(AST_LESS, NULL, left, parse_additive(tokens, token_index));
+        } else if (tok->type == T_LESS_EQUAL) {
+            (*token_index)++;
+            left = create_ast_node(AST_LESS_EQUAL, NULL, left, parse_additive(tokens, token_index));
+        } else if (tok->type == T_GREATER) {
+            (*token_index)++;
+            left = create_ast_node(AST_GREATER, NULL, left, parse_additive(tokens, token_index));
+        } else if (tok->type == T_GREATER_EQUAL) {
+            (*token_index)++;
+            left = create_ast_node(AST_GREATER_EQUAL, NULL, left, parse_additive(tokens, token_index));
+        } else {
+            break;
+        }
+    }
+
+    return left;
+}
+
+struct ast_node* parse_additive(struct token *tokens, int *token_index)
 {
     struct ast_node *left = parse_term(tokens, token_index);
 

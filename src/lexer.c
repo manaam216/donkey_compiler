@@ -38,13 +38,57 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
         } else if (c == '~') {
             add_token(tokens, token_count, T_BITWISE_COMPLEMENT, "~");
         } else if (c == '!') {
-            add_token(tokens, token_count, T_LOGICAL_NEGATION, "!");
+            if ((c = fgetc(infile)) == '=') {
+                add_token(tokens, token_count, T_NOT_EQUAL, "!=");
+            } else {
+                ungetc(c, infile);
+                add_token(tokens, token_count, T_LOGICAL_NEGATION, "!");
+            }
         } else if (c == '+') {
             add_token(tokens, token_count, T_PLUS, "+");
         } else if (c == '*') {
             add_token(tokens, token_count, T_STAR, "*");
         } else if (c == '/') {
             add_token(tokens, token_count, T_SLASH, "/");
+        } else if (c == '%') {
+            add_token(tokens, token_count, T_PERCENT, "%");
+        } else if (c == '&') {
+            if ((c = fgetc(infile)) == '&') {
+                add_token(tokens, token_count, T_LOGICAL_AND, "&&");
+            } else {
+                ungetc(c, infile);
+                add_token(tokens, token_count, T_AMPERSAND, "&");
+            }
+        } else if (c == '|') {
+            if ((c = fgetc(infile)) == '|') {
+                add_token(tokens, token_count, T_LOGICAL_OR, "||");
+            } else {
+                ungetc(c, infile);
+                add_token(tokens, token_count, T_PIPE, "|");
+            }
+        } else if (c == '^') {
+            add_token(tokens, token_count, T_CARET, "^");
+        } else if (c == '=') {
+            if ((c = fgetc(infile)) == '=') {
+                add_token(tokens, token_count, T_EQUAL, "==");
+            } else {
+                ungetc(c, infile);
+                add_token(tokens, token_count, T_ASSIGN, "=");
+            }
+        } else if (c == '<') {
+            if ((c = fgetc(infile)) == '=') {
+                add_token(tokens, token_count, T_LESS_EQUAL, "<=");
+            } else {
+                ungetc(c, infile);
+                add_token(tokens, token_count, T_LESS, "<");
+            }
+        } else if (c == '>') {
+            if ((c = fgetc(infile)) == '=') {
+                add_token(tokens, token_count, T_GREATER_EQUAL, ">=");
+            } else {
+                ungetc(c, infile);
+                add_token(tokens, token_count, T_GREATER, ">");
+            }
         } else if (isalpha(c)) {
             buffer[buffer_index++] = c;
             while (isalnum(c = fgetc(infile)) || c == '_') {

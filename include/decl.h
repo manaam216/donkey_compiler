@@ -12,6 +12,17 @@ struct ast_node* parse_program(struct token *tokens, int *token_index);
 struct ast_node* parse_function(struct token *tokens, int *token_index);
 struct ast_node* parse_statement(struct token *tokens, int *token_index);
 struct ast_node* parse_exp(struct token *tokens, int *token_index);
+struct ast_node* parse_assignment(struct token *tokens, int *token_index);
+struct ast_node* parse_logical_or(struct token *tokens, int *token_index);
+struct ast_node* parse_logical_and(struct token *tokens, int *token_index);
+struct ast_node* parse_bitwise_or(struct token *tokens, int *token_index);
+struct ast_node* parse_bitwise_xor(struct token *tokens, int *token_index);
+struct ast_node* parse_bitwise_and(struct token *tokens, int *token_index);
+struct ast_node* parse_equality(struct token *tokens, int *token_index);
+struct ast_node* parse_relational(struct token *tokens, int *token_index);
+struct ast_node* parse_additive(struct token *tokens, int *token_index);
+struct ast_node* parse_term(struct token *tokens, int *token_index);
+struct ast_node* parse_factor(struct token *tokens, int *token_index);
 
 char* generate(struct ast_node *ast);
 void generate_function(struct ast_node *node, FILE *output);
