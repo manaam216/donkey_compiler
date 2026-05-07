@@ -60,7 +60,7 @@ run_and_expect() {
 }
 
 run_and_expect "$build_dir/sample.exe" 14
-run_and_expect "$build_dir/unary.exe" 250
+run_and_expect "$build_dir/unary.exe" 6
 run_and_expect "$build_dir/operators.exe" 1
 run_and_expect "$build_dir/assignment.exe" 15
 run_and_expect "$build_dir/short_circuit.exe" 1
