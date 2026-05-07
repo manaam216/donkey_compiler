@@ -6,14 +6,19 @@
 
 struct ast_node* parse_program(struct token *tokens, int *token_index)
 {
-    struct ast_node *function = parse_function(tokens, token_index);
+    return create_ast_node(AST_PROGRAM, NULL, parse_function_list(tokens, token_index), NULL);
+}
 
-    if (tokens[*token_index].type != T_EOF) {
-        fprintf(stderr, "Unexpected token after function: %s\n", tokens[*token_index].value);
-        exit(1);
+struct ast_node* parse_function_list(struct token *tokens, int *token_index)
+{
+    if (tokens[*token_index].type == T_EOF) {
+        return NULL;
     }
 
-    return function;
+    struct ast_node *function = parse_function(tokens, token_index);
+    struct ast_node *rest = parse_function_list(tokens, token_index);
+
+    return create_ast_node(AST_FUNCTION_LIST, NULL, function, rest);
 }
 
 struct ast_node* parse_function(struct token *tokens, int *token_index)
@@ -42,6 +47,8 @@ struct ast_node* parse_function(struct token *tokens, int *token_index)
     }
     (*token_index)++;
 
+    struct ast_node *params = parse_param_list(tokens, token_index);
+
     tok = &tokens[*token_index];
     if (tok->type != T_CLOSEPAREN) {
         fprintf(stderr, "Expected ')', found %s\n", tok->value);
@@ -49,14 +56,52 @@ struct ast_node* parse_function(struct token *tokens, int *token_index)
     }
     (*token_index)++;
 
-    tok = &tokens[*token_index];
+    struct ast_node *body = parse_block(tokens, token_index);
+
+    return create_ast_node(AST_FUNCTION, func_name, params, body);
+}
+
+struct ast_node* parse_param_list(struct token *tokens, int *token_index)
+{
+    if (tokens[*token_index].type == T_CLOSEPAREN) {
+        return NULL;
+    }
+
+    if (tokens[*token_index].type != T_INT) {
+        fprintf(stderr, "Expected parameter type 'int', found %s\n", tokens[*token_index].value);
+        exit(1);
+    }
+    (*token_index)++;
+
+    struct token *tok = &tokens[*token_index];
+    if (tok->type != T_IDENTIFIER) {
+        fprintf(stderr, "Expected parameter name, found %s\n", tok->value);
+        exit(1);
+    }
+
+    struct ast_node *param = create_ast_node(AST_IDENTIFIER, tok->value, NULL, NULL);
+    (*token_index)++;
+
+    struct ast_node *rest = NULL;
+    if (tokens[*token_index].type == T_COMMA) {
+        (*token_index)++;
+        rest = parse_param_list(tokens, token_index);
+    }
+
+    return create_ast_node(AST_PARAM_LIST, NULL, param, rest);
+}
+
+struct ast_node* parse_block(struct token *tokens, int *token_index)
+{
+    struct token *tok = &tokens[*token_index];
+
     if (tok->type != T_OPENBRACE) {
         fprintf(stderr, "Expected '{', found %s\n", tok->value);
         exit(1);
     }
     (*token_index)++;
 
-    struct ast_node *stmt = parse_statement(tokens, token_index);
+    struct ast_node *statements = parse_statement_list(tokens, token_index);
 
     tok = &tokens[*token_index];
     if (tok->type != T_CLOSEBRACE) {
@@ -65,18 +110,43 @@ struct ast_node* parse_function(struct token *tokens, int *token_index)
     }
     (*token_index)++;
 
-    return create_ast_node(AST_FUNCTION, func_name, stmt, NULL);
+    return create_ast_node(AST_BLOCK, NULL, statements, NULL);
+}
+
+struct ast_node* parse_statement_list(struct token *tokens, int *token_index)
+{
+    if (tokens[*token_index].type == T_CLOSEBRACE) {
+        return NULL;
+    }
+
+    struct ast_node *stmt = parse_statement(tokens, token_index);
+    struct ast_node *rest = parse_statement_list(tokens, token_index);
+
+    return create_ast_node(AST_STATEMENT_LIST, NULL, stmt, rest);
 }
 
 struct ast_node* parse_statement(struct token *tokens, int *token_index)
 {
     struct token *tok = &tokens[*token_index];
 
-    if (tok->type != T_RETURN) {
-        fprintf(stderr, "Expected 'return', found %s\n", tok->value);
-        exit(1);
+    if (tok->type == T_INT) {
+        return parse_declaration(tokens, token_index);
     }
-    (*token_index)++;
+
+    if (tok->type == T_RETURN) {
+        (*token_index)++;
+
+        struct ast_node *exp = parse_exp(tokens, token_index);
+
+        tok = &tokens[*token_index];
+        if (tok->type != T_SEMICOLON) {
+            fprintf(stderr, "Expected ';', found %s\n", tok->value);
+            exit(1);
+        }
+        (*token_index)++;
+
+        return create_ast_node(AST_RETURN, NULL, exp, NULL);
+    }
 
     struct ast_node *exp = parse_exp(tokens, token_index);
 
@@ -87,7 +157,36 @@ struct ast_node* parse_statement(struct token *tokens, int *token_index)
     }
     (*token_index)++;
 
-    return create_ast_node(AST_RETURN, NULL, exp, NULL);
+    return create_ast_node(AST_EXPR_STMT, NULL, exp, NULL);
+}
+
+struct ast_node* parse_declaration(struct token *tokens, int *token_index)
+{
+    (*token_index)++;
+
+    struct token *tok = &tokens[*token_index];
+    if (tok->type != T_IDENTIFIER) {
+        fprintf(stderr, "Expected identifier in declaration, found %s\n", tok->value);
+        exit(1);
+    }
+
+    char *name = tok->value;
+    (*token_index)++;
+
+    struct ast_node *initializer = NULL;
+    if (tokens[*token_index].type == T_ASSIGN) {
+        (*token_index)++;
+        initializer = parse_exp(tokens, token_index);
+    }
+
+    tok = &tokens[*token_index];
+    if (tok->type != T_SEMICOLON) {
+        fprintf(stderr, "Expected ';', found %s\n", tok->value);
+        exit(1);
+    }
+    (*token_index)++;
+
+    return create_ast_node(AST_DECL, name, initializer, NULL);
 }
 
 struct ast_node* parse_factor(struct token *tokens, int *token_index)
@@ -112,9 +211,21 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
     }
 
     if (tok->type == T_IDENTIFIER) {
-        struct ast_node *id_node = create_ast_node(AST_IDENTIFIER, tok->value, NULL, NULL);
+        char *name = tok->value;
         (*token_index)++;
-        return id_node;
+
+        if (tokens[*token_index].type == T_OPENPAREN) {
+            (*token_index)++;
+            struct ast_node *args = parse_arg_list(tokens, token_index);
+            if (tokens[*token_index].type != T_CLOSEPAREN) {
+                fprintf(stderr, "Expected ')' after function call, found %s\n", tokens[*token_index].value);
+                exit(1);
+            }
+            (*token_index)++;
+            return create_ast_node(AST_CALL, name, args, NULL);
+        }
+
+        return create_ast_node(AST_IDENTIFIER, name, NULL, NULL);
     }
 
     if (tok->type == T_OPENPAREN) {
@@ -131,6 +242,23 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
 
     fprintf(stderr, "Unexpected token %s in expression parsing\n", tok->value);
     exit(1);
+}
+
+struct ast_node* parse_arg_list(struct token *tokens, int *token_index)
+{
+    if (tokens[*token_index].type == T_CLOSEPAREN) {
+        return NULL;
+    }
+
+    struct ast_node *arg = parse_exp(tokens, token_index);
+    struct ast_node *rest = NULL;
+
+    if (tokens[*token_index].type == T_COMMA) {
+        (*token_index)++;
+        rest = parse_arg_list(tokens, token_index);
+    }
+
+    return create_ast_node(AST_ARG_LIST, NULL, arg, rest);
 }
 
 struct ast_node* parse_term(struct token *tokens, int *token_index)

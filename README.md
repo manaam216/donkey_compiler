@@ -22,6 +22,8 @@ a single integer-returning function.
 |   |-- operators.c
 |   |-- assignment.c
 |   |-- short_circuit.c
+|   |-- locals.c
+|   |-- multiple_functions.c
 |   `-- unary.c
 |-- build/            Generated binaries and assembly output
 `-- Makefile
@@ -91,6 +93,8 @@ Compile the assignment and short-circuit examples:
 ```sh
 ./build/donkey examples/assignment.c build/assignment.asm
 ./build/donkey examples/short_circuit.c build/short_circuit.asm
+./build/donkey examples/locals.c build/locals.asm
+./build/donkey examples/multiple_functions.c build/multiple_functions.asm
 ```
 
 If you omit the output path, Donkey writes to `output.asm` in the current
@@ -131,11 +135,15 @@ Supported expression features:
 - Bitwise operators: `&`, `^`, `|`
 - Logical operators: `&&`, `||`
 - Assignment expression: `x = expression`
+- Local declarations: `int x;` and `int x = expression;`
+- Multiple statements inside a function body
+- Multiple zero-argument `int` functions per input file
+- Function parameters: `int helper(int x, int y)`
+- Function calls with arguments: `helper(x, 4)`
 - C-like precedence for the supported expression operators
 
-Identifiers used in expressions are backed by simple static storage emitted in
-the generated assembly. Assignment leaves the assigned value in `%eax`, so it can
-be used inside larger expressions.
+Local variables are stored in a simple stack frame. Assignment leaves the
+assigned value in `%eax`, so it can be used inside larger expressions.
 
 ## Reference Output
 
@@ -163,9 +171,7 @@ This removes the `build/` directory.
 
 ## Current Limitations
 
-- Only one function per input file
-- Only one `return` statement per function body
-- No explicit variable declarations, parameters, conditionals, or loops
-- Identifiers are implicitly created as static integer slots
+- No conditionals or loops
+- No nested block scopes or variable shadowing yet
 - Assembly output is for learning and demonstration, not a complete production
   toolchain

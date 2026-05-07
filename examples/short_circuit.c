@@ -1,4 +1,5 @@
 int main()
 {
-    return (x = 1) || (10 / 0);
+    int x = 1;
+    return x || (10 / 0);
 }
