@@ -129,8 +129,46 @@ struct ast_node* parse_statement(struct token *tokens, int *token_index)
 {
     struct token *tok = &tokens[*token_index];
 
+    if (tok->type == T_OPENBRACE) {
+        return parse_block(tokens, token_index);
+    }
+
     if (tok->type == T_INT) {
         return parse_declaration(tokens, token_index);
+    }
+
+    if (tok->type == T_IF) {
+        return parse_if_statement(tokens, token_index);
+    }
+
+    if (tok->type == T_WHILE) {
+        return parse_while_statement(tokens, token_index);
+    }
+
+    if (tok->type == T_FOR) {
+        return parse_for_statement(tokens, token_index);
+    }
+
+    if (tok->type == T_BREAK) {
+        (*token_index)++;
+        tok = &tokens[*token_index];
+        if (tok->type != T_SEMICOLON) {
+            fprintf(stderr, "Expected ';', found %s\n", tok->value);
+            exit(1);
+        }
+        (*token_index)++;
+        return create_ast_node(AST_BREAK, NULL, NULL, NULL);
+    }
+
+    if (tok->type == T_CONTINUE) {
+        (*token_index)++;
+        tok = &tokens[*token_index];
+        if (tok->type != T_SEMICOLON) {
+            fprintf(stderr, "Expected ';', found %s\n", tok->value);
+            exit(1);
+        }
+        (*token_index)++;
+        return create_ast_node(AST_CONTINUE, NULL, NULL, NULL);
     }
 
     if (tok->type == T_RETURN) {
@@ -187,6 +225,118 @@ struct ast_node* parse_declaration(struct token *tokens, int *token_index)
     (*token_index)++;
 
     return create_ast_node(AST_DECL, name, initializer, NULL);
+}
+
+struct ast_node* parse_if_statement(struct token *tokens, int *token_index)
+{
+    (*token_index)++;
+
+    if (tokens[*token_index].type != T_OPENPAREN) {
+        fprintf(stderr, "Expected '(' after if, found %s\n", tokens[*token_index].value);
+        exit(1);
+    }
+    (*token_index)++;
+
+    struct ast_node *cond = parse_exp(tokens, token_index);
+
+    if (tokens[*token_index].type != T_CLOSEPAREN) {
+        fprintf(stderr, "Expected ')' after if condition, found %s\n", tokens[*token_index].value);
+        exit(1);
+    }
+    (*token_index)++;
+
+    struct ast_node *then_stmt = parse_statement(tokens, token_index);
+    struct ast_node *else_stmt = NULL;
+
+    if (tokens[*token_index].type == T_ELSE) {
+        (*token_index)++;
+        else_stmt = parse_statement(tokens, token_index);
+    }
+
+    return create_ast_node(AST_IF, NULL, cond, create_ast_node(AST_IF_BRANCHES, NULL, then_stmt, else_stmt));
+}
+
+struct ast_node* parse_while_statement(struct token *tokens, int *token_index)
+{
+    (*token_index)++;
+
+    if (tokens[*token_index].type != T_OPENPAREN) {
+        fprintf(stderr, "Expected '(' after while, found %s\n", tokens[*token_index].value);
+        exit(1);
+    }
+    (*token_index)++;
+
+    struct ast_node *cond = parse_exp(tokens, token_index);
+
+    if (tokens[*token_index].type != T_CLOSEPAREN) {
+        fprintf(stderr, "Expected ')' after while condition, found %s\n", tokens[*token_index].value);
+        exit(1);
+    }
+    (*token_index)++;
+
+    return create_ast_node(AST_WHILE, NULL, cond, parse_statement(tokens, token_index));
+}
+
+struct ast_node* parse_for_statement(struct token *tokens, int *token_index)
+{
+    (*token_index)++;
+
+    if (tokens[*token_index].type != T_OPENPAREN) {
+        fprintf(stderr, "Expected '(' after for, found %s\n", tokens[*token_index].value);
+        exit(1);
+    }
+    (*token_index)++;
+
+    struct ast_node *init = parse_for_init(tokens, token_index);
+
+    struct ast_node *cond = parse_optional_exp(tokens, token_index);
+    if (tokens[*token_index].type != T_SEMICOLON) {
+        fprintf(stderr, "Expected ';' after for condition, found %s\n", tokens[*token_index].value);
+        exit(1);
+    }
+    (*token_index)++;
+
+    struct ast_node *post = parse_optional_exp(tokens, token_index);
+    if (tokens[*token_index].type != T_CLOSEPAREN) {
+        fprintf(stderr, "Expected ')' after for clauses, found %s\n", tokens[*token_index].value);
+        exit(1);
+    }
+    (*token_index)++;
+
+    struct ast_node *cond_post = create_ast_node(AST_FOR_PARTS, NULL, cond, post);
+    struct ast_node *parts = create_ast_node(AST_FOR_PARTS, NULL, init, cond_post);
+
+    return create_ast_node(AST_FOR, NULL, parts, parse_statement(tokens, token_index));
+}
+
+struct ast_node* parse_for_init(struct token *tokens, int *token_index)
+{
+    if (tokens[*token_index].type == T_SEMICOLON) {
+        (*token_index)++;
+        return NULL;
+    }
+
+    if (tokens[*token_index].type == T_INT) {
+        return parse_declaration(tokens, token_index);
+    }
+
+    struct ast_node *init = parse_exp(tokens, token_index);
+    if (tokens[*token_index].type != T_SEMICOLON) {
+        fprintf(stderr, "Expected ';' after for initializer, found %s\n", tokens[*token_index].value);
+        exit(1);
+    }
+    (*token_index)++;
+
+    return init;
+}
+
+struct ast_node* parse_optional_exp(struct token *tokens, int *token_index)
+{
+    if (tokens[*token_index].type == T_SEMICOLON || tokens[*token_index].type == T_CLOSEPAREN) {
+        return NULL;
+    }
+
+    return parse_exp(tokens, token_index);
 }
 
 struct ast_node* parse_factor(struct token *tokens, int *token_index)

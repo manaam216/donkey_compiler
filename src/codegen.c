@@ -12,6 +12,9 @@ static int symbol_count = 0;
 static int local_stack_count = 0;
 static int label_count = 0;
 static int current_function_end_label = 0;
+static int loop_break_labels[128];
+static int loop_continue_labels[128];
+static int loop_depth = 0;
 
 static int find_local(const char *name)
 {
@@ -113,6 +116,25 @@ static void generate_epilogue(FILE *output)
     fprintf(output, "    ret\n");
 }
 
+static void push_loop(int break_label, int continue_label)
+{
+    if (loop_depth >= 128) {
+        fprintf(stderr, "Too many nested loops\n");
+        exit(1);
+    }
+
+    loop_break_labels[loop_depth] = break_label;
+    loop_continue_labels[loop_depth] = continue_label;
+    loop_depth++;
+}
+
+static void pop_loop(void)
+{
+    if (loop_depth > 0) {
+        loop_depth--;
+    }
+}
+
 void generate_function(struct ast_node *node, FILE *output)
 {
     collect_params(node->left, 0);
@@ -184,6 +206,84 @@ void generate_statement(struct ast_node *node, FILE *output)
         case AST_RETURN:
             generate_exp(node->left, output);
             fprintf(output, "    jmp     .L%d\n", current_function_end_label);
+            break;
+        case AST_IF: {
+            int else_label = label_count++;
+            int end_label = label_count++;
+
+            generate_exp(node->left, output);
+            fprintf(output, "    cmpl    $0, %%eax\n");
+            fprintf(output, "    je      .L%d\n", else_label);
+            generate_statement(node->right->left, output);
+            fprintf(output, "    jmp     .L%d\n", end_label);
+            fprintf(output, ".L%d:\n", else_label);
+            if (node->right->right) {
+                generate_statement(node->right->right, output);
+            }
+            fprintf(output, ".L%d:\n", end_label);
+            break;
+        }
+        case AST_WHILE: {
+            int start_label = label_count++;
+            int end_label = label_count++;
+
+            push_loop(end_label, start_label);
+            fprintf(output, ".L%d:\n", start_label);
+            generate_exp(node->left, output);
+            fprintf(output, "    cmpl    $0, %%eax\n");
+            fprintf(output, "    je      .L%d\n", end_label);
+            generate_statement(node->right, output);
+            fprintf(output, "    jmp     .L%d\n", start_label);
+            fprintf(output, ".L%d:\n", end_label);
+            pop_loop();
+            break;
+        }
+        case AST_FOR: {
+            struct ast_node *init = node->left->left;
+            struct ast_node *cond = node->left->right->left;
+            struct ast_node *post = node->left->right->right;
+            int start_label = label_count++;
+            int post_label = label_count++;
+            int end_label = label_count++;
+
+            if (init) {
+                if (init->type == AST_DECL) {
+                    generate_statement(init, output);
+                } else {
+                    generate_exp(init, output);
+                }
+            }
+
+            push_loop(end_label, post_label);
+            fprintf(output, ".L%d:\n", start_label);
+            if (cond) {
+                generate_exp(cond, output);
+                fprintf(output, "    cmpl    $0, %%eax\n");
+                fprintf(output, "    je      .L%d\n", end_label);
+            }
+            generate_statement(node->right, output);
+            fprintf(output, ".L%d:\n", post_label);
+            if (post) {
+                generate_exp(post, output);
+            }
+            fprintf(output, "    jmp     .L%d\n", start_label);
+            fprintf(output, ".L%d:\n", end_label);
+            pop_loop();
+            break;
+        }
+        case AST_BREAK:
+            if (loop_depth == 0) {
+                fprintf(stderr, "break used outside of loop\n");
+                exit(1);
+            }
+            fprintf(output, "    jmp     .L%d\n", loop_break_labels[loop_depth - 1]);
+            break;
+        case AST_CONTINUE:
+            if (loop_depth == 0) {
+                fprintf(stderr, "continue used outside of loop\n");
+                exit(1);
+            }
+            fprintf(output, "    jmp     .L%d\n", loop_continue_labels[loop_depth - 1]);
             break;
         default:
             fprintf(stderr, "Unsupported statement node type: %d\n", node->type);

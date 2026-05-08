@@ -24,6 +24,7 @@ a single integer-returning function.
 |   |-- short_circuit.c
 |   |-- locals.c
 |   |-- multiple_functions.c
+|   |-- control_flow.c
 |   `-- unary.c
 |-- build/            Generated binaries and assembly output
 `-- Makefile
@@ -95,6 +96,7 @@ Compile the assignment and short-circuit examples:
 ./build/donkey examples/short_circuit.c build/short_circuit.asm
 ./build/donkey examples/locals.c build/locals.asm
 ./build/donkey examples/multiple_functions.c build/multiple_functions.asm
+./build/donkey examples/control_flow.c build/control_flow.asm
 ```
 
 If you omit the output path, Donkey writes to `output.asm` in the current
@@ -140,6 +142,9 @@ Supported expression features:
 - Multiple zero-argument `int` functions per input file
 - Function parameters: `int helper(int x, int y)`
 - Function calls with arguments: `helper(x, 4)`
+- Conditionals: `if` and `if/else`
+- Loops: `while`, expression-clause `for`, and declaration-initializer `for`
+- Loop control: `break` and `continue`
 - C-like precedence for the supported expression operators
 
 Local variables are stored in a simple stack frame. Assignment leaves the
@@ -171,7 +176,6 @@ This removes the `build/` directory.
 
 ## Current Limitations
 
-- No conditionals or loops
 - No nested block scopes or variable shadowing yet
 - Assembly output is for learning and demonstration, not a complete production
   toolchain
