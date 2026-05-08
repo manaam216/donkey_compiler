@@ -25,6 +25,7 @@ a single integer-returning function.
 |   |-- locals.c
 |   |-- multiple_functions.c
 |   |-- control_flow.c
+|   |-- missing_ops.c
 |   `-- unary.c
 |-- build/            Generated binaries and assembly output
 `-- Makefile
@@ -146,6 +147,13 @@ Supported expression features:
 - Loops: `while`, expression-clause `for`, and declaration-initializer `for`
 - Loop control: `break` and `continue`
 - C-like precedence for the supported expression operators
+- Shifts: `<<`, `>>`
+- Increment/decrement: `++x`, `x++`, `--x`, `x--`
+- Compound assignments: `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
+- Ternary conditional: `condition ? then_expr : else_expr`
+- Comma expressions: `a, b`
+- `sizeof` for int-sized values
+- Int casts: `(int)x`
 
 Local variables are stored in a simple stack frame. Assignment leaves the
 assigned value in `%eax`, so it can be used inside larger expressions.

@@ -325,6 +325,16 @@ void generate_binop(struct ast_node *node, FILE *output)
             fprintf(output, "    idivl   %%ecx\n");
             fprintf(output, "    movl    %%edx, %%eax\n");
             break;
+        case AST_SHIFT_LEFT:
+            fprintf(output, "    movl    %%eax, %%ecx\n");
+            fprintf(output, "    movl    %%edx, %%eax\n");
+            fprintf(output, "    sall    %%cl, %%eax\n");
+            break;
+        case AST_SHIFT_RIGHT:
+            fprintf(output, "    movl    %%eax, %%ecx\n");
+            fprintf(output, "    movl    %%edx, %%eax\n");
+            fprintf(output, "    sarl    %%cl, %%eax\n");
+            break;
         case AST_BITWISE_AND:
             fprintf(output, "    andl    %%edx, %%eax\n");
             break;
@@ -392,6 +402,8 @@ void generate_exp(struct ast_node *node, FILE *output)
         case AST_MUL:
         case AST_DIV:
         case AST_MOD:
+        case AST_SHIFT_LEFT:
+        case AST_SHIFT_RIGHT:
         case AST_BITWISE_AND:
         case AST_BITWISE_OR:
         case AST_BITWISE_XOR:
@@ -402,6 +414,24 @@ void generate_exp(struct ast_node *node, FILE *output)
         case AST_GREATER:
         case AST_GREATER_EQUAL:
             generate_binop(node, output);
+            break;
+        case AST_CONDITIONAL: {
+            int else_label = label_count++;
+            int end_label = label_count++;
+
+            generate_exp(node->left, output);
+            fprintf(output, "    cmpl    $0, %%eax\n");
+            fprintf(output, "    je      .L%d\n", else_label);
+            generate_exp(node->right->left, output);
+            fprintf(output, "    jmp     .L%d\n", end_label);
+            fprintf(output, ".L%d:\n", else_label);
+            generate_exp(node->right->right, output);
+            fprintf(output, ".L%d:\n", end_label);
+            break;
+        }
+        case AST_COMMA:
+            generate_exp(node->left, output);
+            generate_exp(node->right, output);
             break;
         case AST_LOGICAL_AND: {
             int false_label = label_count++;
@@ -440,6 +470,36 @@ void generate_exp(struct ast_node *node, FILE *output)
         case AST_ASSIGN:
             generate_exp(node->right, output);
             fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->left->value));
+            break;
+        case AST_PRE_INCREMENT:
+            fprintf(output, "    movl    %d(%%ebp), %%eax\n", local_offset(node->left->value));
+            fprintf(output, "    addl    $1, %%eax\n");
+            fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->left->value));
+            break;
+        case AST_PRE_DECREMENT:
+            fprintf(output, "    movl    %d(%%ebp), %%eax\n", local_offset(node->left->value));
+            fprintf(output, "    subl    $1, %%eax\n");
+            fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->left->value));
+            break;
+        case AST_POST_INCREMENT:
+            fprintf(output, "    movl    %d(%%ebp), %%eax\n", local_offset(node->left->value));
+            fprintf(output, "    push    %%eax\n");
+            fprintf(output, "    addl    $1, %%eax\n");
+            fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->left->value));
+            fprintf(output, "    pop     %%eax\n");
+            break;
+        case AST_POST_DECREMENT:
+            fprintf(output, "    movl    %d(%%ebp), %%eax\n", local_offset(node->left->value));
+            fprintf(output, "    push    %%eax\n");
+            fprintf(output, "    subl    $1, %%eax\n");
+            fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->left->value));
+            fprintf(output, "    pop     %%eax\n");
+            break;
+        case AST_SIZEOF:
+            fprintf(output, "    movl    $4, %%eax\n");
+            break;
+        case AST_CAST:
+            generate_exp(node->left, output);
             break;
         case AST_NEGATION:
             generate_exp(node->left, output);
