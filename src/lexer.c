@@ -103,6 +103,18 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
                 add_token(tokens, token_count, T_INT, buffer);
             } else if (strcmp(buffer, "return") == 0) {
                 add_token(tokens, token_count, T_RETURN, buffer);
+            } else if (strcmp(buffer, "if") == 0) {
+                add_token(tokens, token_count, T_IF, buffer);
+            } else if (strcmp(buffer, "else") == 0) {
+                add_token(tokens, token_count, T_ELSE, buffer);
+            } else if (strcmp(buffer, "while") == 0) {
+                add_token(tokens, token_count, T_WHILE, buffer);
+            } else if (strcmp(buffer, "for") == 0) {
+                add_token(tokens, token_count, T_FOR, buffer);
+            } else if (strcmp(buffer, "break") == 0) {
+                add_token(tokens, token_count, T_BREAK, buffer);
+            } else if (strcmp(buffer, "continue") == 0) {
+                add_token(tokens, token_count, T_CONTINUE, buffer);
             } else {
                 add_token(tokens, token_count, T_IDENTIFIER, buffer);
             }
