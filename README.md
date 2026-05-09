@@ -27,6 +27,7 @@ integer-returning functions.
 |   |-- control_flow.c
 |   |-- casts.c
 |   |-- comments.c
+|   |-- globals.c
 |   |-- missing_ops.c
 |   `-- unary.c
 |-- build/            Generated binaries and assembly output
@@ -102,6 +103,7 @@ Compile the assignment and short-circuit examples:
 ./build/donkey examples/control_flow.c build/control_flow.asm
 ./build/donkey examples/casts.c build/casts.asm
 ./build/donkey examples/comments.c build/comments.asm
+./build/donkey examples/globals.c build/globals.asm
 ```
 
 If you omit the output path, Donkey writes to `output.asm` in the current
@@ -147,6 +149,7 @@ Supported expression features:
 - Multiple zero-argument `int` functions per input file
 - Function parameters: `int helper(int x, int y)`
 - Function calls with arguments: `helper(x, 4)`
+- Global variables: `int g;` and `int g = constant_expression;`
 - Conditionals: `if` and `if/else`
 - Loops: `while`, expression-clause `for`, and declaration-initializer `for`
 - Loop control: `break` and `continue`
@@ -193,5 +196,6 @@ This removes the `build/` directory.
 ## Current Limitations
 
 - No nested block scopes or variable shadowing yet
+- Global initializers must be constant expressions
 - Assembly output is for learning and demonstration, not a complete production
   toolchain

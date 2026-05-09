@@ -8,7 +8,12 @@ static struct {
     char *name;
     int offset;
 } symbols[256];
+static struct {
+    char *name;
+    int value;
+} globals[256];
 static int symbol_count = 0;
+static int global_count = 0;
 static int local_stack_count = 0;
 static int label_count = 0;
 static int current_function_end_label = 0;
@@ -38,6 +43,17 @@ static int local_offset(const char *name)
     return symbols[index].offset;
 }
 
+static int find_global(const char *name)
+{
+    for (int i = 0; i < global_count; i++) {
+        if (strcmp(globals[i].name, name) == 0) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
 static void add_symbol(const char *name, int offset)
 {
     if (!name) {
@@ -57,6 +73,29 @@ static void add_symbol(const char *name, int offset)
     symbols[symbol_count].name = strdup(name);
     symbols[symbol_count].offset = offset;
     symbol_count++;
+}
+
+static int eval_const_exp(struct ast_node *node);
+
+static void add_global(const char *name, int value)
+{
+    if (!name) {
+        return;
+    }
+
+    if (find_global(name) >= 0) {
+        fprintf(stderr, "Redeclaration of global variable '%s'\n", name);
+        exit(1);
+    }
+
+    if (global_count >= 256) {
+        fprintf(stderr, "Too many global variables\n");
+        exit(1);
+    }
+
+    globals[global_count].name = strdup(name);
+    globals[global_count].value = value;
+    global_count++;
 }
 
 static void add_param(const char *name, int index)
@@ -116,6 +155,40 @@ static void generate_epilogue(FILE *output)
     fprintf(output, "    ret\n");
 }
 
+static void generate_identifier_load(const char *name, FILE *output)
+{
+    int local_index = find_local(name);
+    if (local_index >= 0) {
+        fprintf(output, "    movl    %d(%%ebp), %%eax\n", symbols[local_index].offset);
+        return;
+    }
+
+    if (find_global(name) >= 0) {
+        fprintf(output, "    movl    _%s, %%eax\n", name);
+        return;
+    }
+
+    fprintf(stderr, "Use of undeclared identifier '%s'\n", name);
+    exit(1);
+}
+
+static void generate_identifier_store(const char *name, FILE *output)
+{
+    int local_index = find_local(name);
+    if (local_index >= 0) {
+        fprintf(output, "    movl    %%eax, %d(%%ebp)\n", symbols[local_index].offset);
+        return;
+    }
+
+    if (find_global(name) >= 0) {
+        fprintf(output, "    movl    %%eax, _%s\n", name);
+        return;
+    }
+
+    fprintf(stderr, "Use of undeclared identifier '%s'\n", name);
+    exit(1);
+}
+
 static void push_loop(int break_label, int continue_label)
 {
     if (loop_depth >= 128) {
@@ -165,6 +238,100 @@ static void generate_cast(const char *type, FILE *output)
     }
 }
 
+static int eval_const_exp(struct ast_node *node)
+{
+    if (!node) {
+        return 0;
+    }
+
+    switch (node->type) {
+        case AST_INTLIT:
+            return atoi(node->value);
+        case AST_NEGATION:
+            return -eval_const_exp(node->left);
+        case AST_BITWISE_COMPLEMENT:
+            return ~eval_const_exp(node->left);
+        case AST_LOGICAL_NEGATION:
+            return !eval_const_exp(node->left);
+        case AST_ADD:
+            return eval_const_exp(node->left) + eval_const_exp(node->right);
+        case AST_SUB:
+            return eval_const_exp(node->left) - eval_const_exp(node->right);
+        case AST_MUL:
+            return eval_const_exp(node->left) * eval_const_exp(node->right);
+        case AST_DIV:
+            return eval_const_exp(node->left) / eval_const_exp(node->right);
+        case AST_MOD:
+            return eval_const_exp(node->left) % eval_const_exp(node->right);
+        case AST_SHIFT_LEFT:
+            return eval_const_exp(node->left) << eval_const_exp(node->right);
+        case AST_SHIFT_RIGHT:
+            return eval_const_exp(node->left) >> eval_const_exp(node->right);
+        case AST_BITWISE_AND:
+            return eval_const_exp(node->left) & eval_const_exp(node->right);
+        case AST_BITWISE_OR:
+            return eval_const_exp(node->left) | eval_const_exp(node->right);
+        case AST_BITWISE_XOR:
+            return eval_const_exp(node->left) ^ eval_const_exp(node->right);
+        case AST_LOGICAL_AND:
+            return eval_const_exp(node->left) && eval_const_exp(node->right);
+        case AST_LOGICAL_OR:
+            return eval_const_exp(node->left) || eval_const_exp(node->right);
+        case AST_EQUAL:
+            return eval_const_exp(node->left) == eval_const_exp(node->right);
+        case AST_NOT_EQUAL:
+            return eval_const_exp(node->left) != eval_const_exp(node->right);
+        case AST_LESS:
+            return eval_const_exp(node->left) < eval_const_exp(node->right);
+        case AST_LESS_EQUAL:
+            return eval_const_exp(node->left) <= eval_const_exp(node->right);
+        case AST_GREATER:
+            return eval_const_exp(node->left) > eval_const_exp(node->right);
+        case AST_GREATER_EQUAL:
+            return eval_const_exp(node->left) >= eval_const_exp(node->right);
+        case AST_CONDITIONAL:
+            return eval_const_exp(node->left) ? eval_const_exp(node->right->left) : eval_const_exp(node->right->right);
+        case AST_COMMA:
+            return eval_const_exp(node->right);
+        case AST_SIZEOF:
+            return type_size(node->value);
+        case AST_CAST:
+            return eval_const_exp(node->left);
+        default:
+            fprintf(stderr, "Global initializer must be a constant expression\n");
+            exit(1);
+    }
+}
+
+static void collect_globals(struct ast_node *node)
+{
+    if (!node) {
+        return;
+    }
+
+    if (node->type == AST_FUNCTION_LIST) {
+        collect_globals(node->left);
+        collect_globals(node->right);
+    } else if (node->type == AST_GLOBAL_DECL) {
+        add_global(node->value, eval_const_exp(node->left));
+    }
+}
+
+static void generate_globals(FILE *output)
+{
+    if (global_count == 0) {
+        return;
+    }
+
+    fprintf(output, ".data\n");
+    for (int i = 0; i < global_count; i++) {
+        fprintf(output, ".globl _%s\n", globals[i].name);
+        fprintf(output, "_%s:\n", globals[i].name);
+        fprintf(output, "    .long   %d\n", globals[i].value);
+    }
+    fprintf(output, ".text\n");
+}
+
 void generate_function(struct ast_node *node, FILE *output)
 {
     collect_params(node->left, 0);
@@ -193,6 +360,8 @@ void generate_program(struct ast_node *node, FILE *output)
 
     switch (node->type) {
         case AST_PROGRAM:
+            collect_globals(node->left);
+            generate_globals(output);
             generate_program(node->left, output);
             break;
         case AST_FUNCTION_LIST:
@@ -201,6 +370,8 @@ void generate_program(struct ast_node *node, FILE *output)
             break;
         case AST_FUNCTION:
             generate_function(node, output);
+            break;
+        case AST_GLOBAL_DECL:
             break;
         default:
             fprintf(stderr, "Unsupported program node type: %d\n", node->type);
@@ -417,7 +588,7 @@ void generate_exp(struct ast_node *node, FILE *output)
             fprintf(output, "    movl    $%s, %%eax\n", node->value);
             break;
         case AST_IDENTIFIER:
-            fprintf(output, "    movl    %d(%%ebp), %%eax\n", local_offset(node->value));
+            generate_identifier_load(node->value, output);
             break;
         case AST_CALL: {
             int arg_count = generate_call_args(node->left, output);
@@ -499,30 +670,30 @@ void generate_exp(struct ast_node *node, FILE *output)
         }
         case AST_ASSIGN:
             generate_exp(node->right, output);
-            fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->left->value));
+            generate_identifier_store(node->left->value, output);
             break;
         case AST_PRE_INCREMENT:
-            fprintf(output, "    movl    %d(%%ebp), %%eax\n", local_offset(node->left->value));
+            generate_identifier_load(node->left->value, output);
             fprintf(output, "    addl    $1, %%eax\n");
-            fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->left->value));
+            generate_identifier_store(node->left->value, output);
             break;
         case AST_PRE_DECREMENT:
-            fprintf(output, "    movl    %d(%%ebp), %%eax\n", local_offset(node->left->value));
+            generate_identifier_load(node->left->value, output);
             fprintf(output, "    subl    $1, %%eax\n");
-            fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->left->value));
+            generate_identifier_store(node->left->value, output);
             break;
         case AST_POST_INCREMENT:
-            fprintf(output, "    movl    %d(%%ebp), %%eax\n", local_offset(node->left->value));
+            generate_identifier_load(node->left->value, output);
             fprintf(output, "    push    %%eax\n");
             fprintf(output, "    addl    $1, %%eax\n");
-            fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->left->value));
+            generate_identifier_store(node->left->value, output);
             fprintf(output, "    pop     %%eax\n");
             break;
         case AST_POST_DECREMENT:
-            fprintf(output, "    movl    %d(%%ebp), %%eax\n", local_offset(node->left->value));
+            generate_identifier_load(node->left->value, output);
             fprintf(output, "    push    %%eax\n");
             fprintf(output, "    subl    $1, %%eax\n");
-            fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->left->value));
+            generate_identifier_store(node->left->value, output);
             fprintf(output, "    pop     %%eax\n");
             break;
         case AST_SIZEOF:

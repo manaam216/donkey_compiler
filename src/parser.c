@@ -53,10 +53,29 @@ struct ast_node* parse_function_list(struct token *tokens, int *token_index)
         return NULL;
     }
 
-    struct ast_node *function = parse_function(tokens, token_index);
+    struct ast_node *function = parse_external_declaration(tokens, token_index);
     struct ast_node *rest = parse_function_list(tokens, token_index);
 
     return create_ast_node(AST_FUNCTION_LIST, NULL, function, rest);
+}
+
+struct ast_node* parse_external_declaration(struct token *tokens, int *token_index)
+{
+    if (tokens[*token_index].type != T_INT) {
+        fprintf(stderr, "Expected top-level declaration, found %s\n", tokens[*token_index].value);
+        exit(1);
+    }
+
+    if (tokens[*token_index + 1].type != T_IDENTIFIER) {
+        fprintf(stderr, "Expected identifier in top-level declaration, found %s\n", tokens[*token_index + 1].value);
+        exit(1);
+    }
+
+    if (tokens[*token_index + 2].type == T_OPENPAREN) {
+        return parse_function(tokens, token_index);
+    }
+
+    return parse_global_declaration(tokens, token_index);
 }
 
 struct ast_node* parse_function(struct token *tokens, int *token_index)
@@ -97,6 +116,34 @@ struct ast_node* parse_function(struct token *tokens, int *token_index)
     struct ast_node *body = parse_block(tokens, token_index);
 
     return create_ast_node(AST_FUNCTION, func_name, params, body);
+}
+
+struct ast_node* parse_global_declaration(struct token *tokens, int *token_index)
+{
+    (*token_index)++;
+
+    struct token *tok = &tokens[*token_index];
+    if (tok->type != T_IDENTIFIER) {
+        fprintf(stderr, "Expected global variable name, found %s\n", tok->value);
+        exit(1);
+    }
+
+    char *name = tok->value;
+    (*token_index)++;
+
+    struct ast_node *initializer = NULL;
+    if (tokens[*token_index].type == T_ASSIGN) {
+        (*token_index)++;
+        initializer = parse_exp(tokens, token_index);
+    }
+
+    if (tokens[*token_index].type != T_SEMICOLON) {
+        fprintf(stderr, "Expected ';' after global declaration, found %s\n", tokens[*token_index].value);
+        exit(1);
+    }
+    (*token_index)++;
+
+    return create_ast_node(AST_GLOBAL_DECL, name, initializer, NULL);
 }
 
 struct ast_node* parse_param_list(struct token *tokens, int *token_index)
