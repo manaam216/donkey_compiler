@@ -135,6 +135,36 @@ static void pop_loop(void)
     }
 }
 
+static int type_size(const char *type)
+{
+    if (!type) {
+        return 4;
+    }
+    if (strcmp(type, "char") == 0 || strcmp(type, "uchar") == 0) {
+        return 1;
+    }
+    if (strcmp(type, "short") == 0 || strcmp(type, "ushort") == 0) {
+        return 2;
+    }
+    return 4;
+}
+
+static void generate_cast(const char *type, FILE *output)
+{
+    if (!type) {
+        return;
+    }
+    if (strcmp(type, "char") == 0) {
+        fprintf(output, "    movsbl  %%al, %%eax\n");
+    } else if (strcmp(type, "uchar") == 0) {
+        fprintf(output, "    movzbl  %%al, %%eax\n");
+    } else if (strcmp(type, "short") == 0) {
+        fprintf(output, "    movswl  %%ax, %%eax\n");
+    } else if (strcmp(type, "ushort") == 0) {
+        fprintf(output, "    movzwl  %%ax, %%eax\n");
+    }
+}
+
 void generate_function(struct ast_node *node, FILE *output)
 {
     collect_params(node->left, 0);
@@ -496,10 +526,11 @@ void generate_exp(struct ast_node *node, FILE *output)
             fprintf(output, "    pop     %%eax\n");
             break;
         case AST_SIZEOF:
-            fprintf(output, "    movl    $4, %%eax\n");
+            fprintf(output, "    movl    $%d, %%eax\n", type_size(node->value));
             break;
         case AST_CAST:
             generate_exp(node->left, output);
+            generate_cast(node->value, output);
             break;
         case AST_NEGATION:
             generate_exp(node->left, output);

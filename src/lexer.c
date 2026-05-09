@@ -155,8 +155,18 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
             ungetc(c, infile);
             buffer[buffer_index] = '\0';
 
-            if (strcmp(buffer, "int") == 0) {
+            if (strcmp(buffer, "char") == 0) {
+                add_token(tokens, token_count, T_CHAR, buffer);
+            } else if (strcmp(buffer, "short") == 0) {
+                add_token(tokens, token_count, T_SHORT, buffer);
+            } else if (strcmp(buffer, "int") == 0) {
                 add_token(tokens, token_count, T_INT, buffer);
+            } else if (strcmp(buffer, "long") == 0) {
+                add_token(tokens, token_count, T_LONG, buffer);
+            } else if (strcmp(buffer, "signed") == 0) {
+                add_token(tokens, token_count, T_SIGNED, buffer);
+            } else if (strcmp(buffer, "unsigned") == 0) {
+                add_token(tokens, token_count, T_UNSIGNED, buffer);
             } else if (strcmp(buffer, "return") == 0) {
                 add_token(tokens, token_count, T_RETURN, buffer);
             } else if (strcmp(buffer, "if") == 0) {

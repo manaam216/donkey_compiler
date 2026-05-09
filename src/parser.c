@@ -4,6 +4,44 @@
 #include <string.h>
 #include "decl.h"
 
+static const char* parse_type_name(struct token *tokens, int *token_index)
+{
+    int is_unsigned = 0;
+    int has_sign = 0;
+    TokenType base_type;
+
+    if (tokens[*token_index].type == T_SIGNED || tokens[*token_index].type == T_UNSIGNED) {
+        is_unsigned = tokens[*token_index].type == T_UNSIGNED;
+        has_sign = 1;
+        (*token_index)++;
+    }
+
+    base_type = tokens[*token_index].type;
+    if (base_type == T_CHAR || base_type == T_SHORT || base_type == T_INT || base_type == T_LONG) {
+        (*token_index)++;
+    } else if (has_sign) {
+        base_type = T_INT;
+    } else {
+        return NULL;
+    }
+
+    if ((base_type == T_SHORT || base_type == T_LONG) && tokens[*token_index].type == T_INT) {
+        (*token_index)++;
+    }
+
+    if (base_type == T_CHAR) {
+        return is_unsigned ? "uchar" : "char";
+    }
+    if (base_type == T_SHORT) {
+        return is_unsigned ? "ushort" : "short";
+    }
+    if (base_type == T_LONG) {
+        return is_unsigned ? "ulong" : "long";
+    }
+
+    return is_unsigned ? "uint" : "int";
+}
+
 struct ast_node* parse_program(struct token *tokens, int *token_index)
 {
     return create_ast_node(AST_PROGRAM, NULL, parse_function_list(tokens, token_index), NULL);
@@ -361,17 +399,17 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
         return create_ast_node(AST_PRE_DECREMENT, NULL, operand, NULL);
     } else if (tok->type == T_SIZEOF) {
         (*token_index)++;
-        if (tokens[*token_index].type == T_OPENPAREN && tokens[*token_index + 1].type == T_INT) {
-            (*token_index) += 2;
-            if (tokens[*token_index].type != T_CLOSEPAREN) {
-                fprintf(stderr, "Expected ')' after sizeof(int), found %s\n", tokens[*token_index].value);
-                exit(1);
+        if (tokens[*token_index].type == T_OPENPAREN) {
+            int type_index = *token_index + 1;
+            const char *type_name = parse_type_name(tokens, &type_index);
+            if (type_name && tokens[type_index].type == T_CLOSEPAREN) {
+                *token_index = type_index + 1;
+                return create_ast_node(AST_SIZEOF, (char *)type_name, NULL, NULL);
             }
-            (*token_index)++;
-        } else {
-            parse_factor(tokens, token_index);
         }
-        return create_ast_node(AST_SIZEOF, NULL, NULL, NULL);
+
+        parse_factor(tokens, token_index);
+        return create_ast_node(AST_SIZEOF, "int", NULL, NULL);
     } else if (tok->type == T_MINUS) {
         (*token_index)++;
         return create_ast_node(AST_NEGATION, NULL, parse_factor(tokens, token_index), NULL);
@@ -423,9 +461,11 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
 
     if (tok->type == T_OPENPAREN) {
         (*token_index)++;
-        if (tokens[*token_index].type == T_INT && tokens[*token_index + 1].type == T_CLOSEPAREN) {
-            (*token_index) += 2;
-            return create_ast_node(AST_CAST, NULL, parse_factor(tokens, token_index), NULL);
+        int type_index = *token_index;
+        const char *type_name = parse_type_name(tokens, &type_index);
+        if (type_name && tokens[type_index].type == T_CLOSEPAREN) {
+            *token_index = type_index + 1;
+            return create_ast_node(AST_CAST, (char *)type_name, parse_factor(tokens, token_index), NULL);
         }
 
         struct ast_node *inner_exp = parse_exp(tokens, token_index);
