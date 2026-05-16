@@ -21,6 +21,8 @@ mkdir -p "$build_dir"
 "$compiler" examples/control_flow.c "$build_dir/control_flow.asm"
 "$compiler" examples/missing_ops.c "$build_dir/missing_ops.asm"
 "$compiler" examples/casts.c "$build_dir/casts.asm"
+"$compiler" examples/comments.c "$build_dir/comments.asm"
+"$compiler" examples/globals.c "$build_dir/globals.asm"
 
 awk '
     NR == FNR {
@@ -53,6 +55,8 @@ awk '
 "$cc" -x assembler "$build_dir/control_flow.asm" -o "$build_dir/control_flow.exe"
 "$cc" -x assembler "$build_dir/missing_ops.asm" -o "$build_dir/missing_ops.exe"
 "$cc" -x assembler "$build_dir/casts.asm" -o "$build_dir/casts.exe"
+"$cc" -x assembler "$build_dir/comments.asm" -o "$build_dir/comments.exe"
+"$cc" -x assembler "$build_dir/globals.asm" -o "$build_dir/globals.exe"
 
 run_and_expect() {
     exe="$1"
@@ -79,5 +83,7 @@ run_and_expect "$build_dir/multiple_functions.exe" 16
 run_and_expect "$build_dir/control_flow.exe" 16
 run_and_expect "$build_dir/missing_ops.exe" 52
 run_and_expect "$build_dir/casts.exe" 29
+run_and_expect "$build_dir/comments.exe" 12
+run_and_expect "$build_dir/globals.exe" 21
 
 echo "All compiler checks passed."

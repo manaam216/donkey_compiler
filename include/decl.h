@@ -10,7 +10,9 @@ void free_ast_node(struct ast_node *node);
 
 struct ast_node* parse_program(struct token *tokens, int *token_index);
 struct ast_node* parse_function_list(struct token *tokens, int *token_index);
+struct ast_node* parse_external_declaration(struct token *tokens, int *token_index);
 struct ast_node* parse_function(struct token *tokens, int *token_index);
+struct ast_node* parse_global_declaration(struct token *tokens, int *token_index);
 struct ast_node* parse_param_list(struct token *tokens, int *token_index);
 struct ast_node* parse_block(struct token *tokens, int *token_index);
 struct ast_node* parse_statement_list(struct token *tokens, int *token_index);

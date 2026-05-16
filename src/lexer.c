@@ -74,7 +74,32 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
                 add_token(tokens, token_count, T_STAR, "*");
             }
         } else if (c == '/') {
-            if ((c = fgetc(infile)) == '=') {
+            if ((c = fgetc(infile)) == '/') {
+                while ((c = fgetc(infile)) != EOF && c != '\n') {
+                }
+                if (c == '\n') {
+                    line++;
+                }
+            } else if (c == '*') {
+                int prev = 0;
+                int closed = 0;
+
+                while ((c = fgetc(infile)) != EOF) {
+                    if (c == '\n') {
+                        line++;
+                    }
+                    if (prev == '*' && c == '/') {
+                        closed = 1;
+                        break;
+                    }
+                    prev = c;
+                }
+
+                if (!closed) {
+                    fprintf(stderr, "Error: Unterminated block comment on line %d\n", line);
+                    exit(EXIT_FAILURE);
+                }
+            } else if (c == '=') {
                 add_token(tokens, token_count, T_SLASH_ASSIGN, "/=");
             } else {
                 ungetc(c, infile);
