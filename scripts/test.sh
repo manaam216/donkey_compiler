@@ -19,6 +19,8 @@ mkdir -p "$build_dir"
 "$compiler" examples/locals.c "$build_dir/locals.asm"
 "$compiler" examples/multiple_functions.c "$build_dir/multiple_functions.asm"
 "$compiler" examples/control_flow.c "$build_dir/control_flow.asm"
+"$compiler" examples/missing_ops.c "$build_dir/missing_ops.asm"
+"$compiler" examples/casts.c "$build_dir/casts.asm"
 
 awk '
     NR == FNR {
@@ -49,6 +51,8 @@ awk '
 "$cc" -x assembler "$build_dir/locals.asm" -o "$build_dir/locals.exe"
 "$cc" -x assembler "$build_dir/multiple_functions.asm" -o "$build_dir/multiple_functions.exe"
 "$cc" -x assembler "$build_dir/control_flow.asm" -o "$build_dir/control_flow.exe"
+"$cc" -x assembler "$build_dir/missing_ops.asm" -o "$build_dir/missing_ops.exe"
+"$cc" -x assembler "$build_dir/casts.asm" -o "$build_dir/casts.exe"
 
 run_and_expect() {
     exe="$1"
@@ -73,5 +77,7 @@ run_and_expect "$build_dir/short_circuit.exe" 1
 run_and_expect "$build_dir/locals.exe" 14
 run_and_expect "$build_dir/multiple_functions.exe" 16
 run_and_expect "$build_dir/control_flow.exe" 16
+run_and_expect "$build_dir/missing_ops.exe" 52
+run_and_expect "$build_dir/casts.exe" 29
 
 echo "All compiler checks passed."

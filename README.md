@@ -2,7 +2,7 @@
 
 Donkey is a small educational compiler written in C. It accepts a tiny C-like
 program, builds an abstract syntax tree, and emits 32-bit x86-style assembly for
-a single integer-returning function.
+integer-returning functions.
 
 ## Directory Layout
 
@@ -25,6 +25,8 @@ a single integer-returning function.
 |   |-- locals.c
 |   |-- multiple_functions.c
 |   |-- control_flow.c
+|   |-- casts.c
+|   |-- missing_ops.c
 |   `-- unary.c
 |-- build/            Generated binaries and assembly output
 `-- Makefile
@@ -97,6 +99,7 @@ Compile the assignment and short-circuit examples:
 ./build/donkey examples/locals.c build/locals.asm
 ./build/donkey examples/multiple_functions.c build/multiple_functions.asm
 ./build/donkey examples/control_flow.c build/control_flow.asm
+./build/donkey examples/casts.c build/casts.asm
 ```
 
 If you omit the output path, Donkey writes to `output.asm` in the current
@@ -114,7 +117,7 @@ make sample
 
 ## Language Support
 
-Donkey currently accepts one function in this form:
+Donkey currently accepts C-like `int` functions in this form:
 
 ```c
 int main()
@@ -146,6 +149,16 @@ Supported expression features:
 - Loops: `while`, expression-clause `for`, and declaration-initializer `for`
 - Loop control: `break` and `continue`
 - C-like precedence for the supported expression operators
+- Shifts: `<<`, `>>`
+- Increment/decrement: `++x`, `x++`, `--x`, `x--`
+- Compound assignments: `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
+- Ternary conditional: `condition ? then_expr : else_expr`
+- Comma expressions: `a, b`
+- `sizeof` for common integer type names: `char`, `short`, `int`, `long`,
+  plus signed and unsigned variants
+- Casts for common integer type names: `(char)x`, `(unsigned char)x`,
+  `(short)x`, `(unsigned short)x`, `(int)x`, `(long)x`, and signed/unsigned
+  int/long variants
 
 Local variables are stored in a simple stack frame. Assignment leaves the
 assigned value in `%eax`, so it can be used inside larger expressions.

@@ -35,8 +35,19 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
             add_token(tokens, token_count, T_SEMICOLON, ";");
         } else if (c == ',') {
             add_token(tokens, token_count, T_COMMA, ",");
+        } else if (c == '?') {
+            add_token(tokens, token_count, T_QUESTION, "?");
+        } else if (c == ':') {
+            add_token(tokens, token_count, T_COLON, ":");
         } else if (c == '-') {
-            add_token(tokens, token_count, T_MINUS, "-");
+            if ((c = fgetc(infile)) == '-') {
+                add_token(tokens, token_count, T_MINUS_MINUS, "--");
+            } else if (c == '=') {
+                add_token(tokens, token_count, T_MINUS_ASSIGN, "-=");
+            } else {
+                ungetc(c, infile);
+                add_token(tokens, token_count, T_MINUS, "-");
+            }
         } else if (c == '~') {
             add_token(tokens, token_count, T_BITWISE_COMPLEMENT, "~");
         } else if (c == '!') {
@@ -47,16 +58,40 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
                 add_token(tokens, token_count, T_LOGICAL_NEGATION, "!");
             }
         } else if (c == '+') {
-            add_token(tokens, token_count, T_PLUS, "+");
+            if ((c = fgetc(infile)) == '+') {
+                add_token(tokens, token_count, T_PLUS_PLUS, "++");
+            } else if (c == '=') {
+                add_token(tokens, token_count, T_PLUS_ASSIGN, "+=");
+            } else {
+                ungetc(c, infile);
+                add_token(tokens, token_count, T_PLUS, "+");
+            }
         } else if (c == '*') {
-            add_token(tokens, token_count, T_STAR, "*");
+            if ((c = fgetc(infile)) == '=') {
+                add_token(tokens, token_count, T_STAR_ASSIGN, "*=");
+            } else {
+                ungetc(c, infile);
+                add_token(tokens, token_count, T_STAR, "*");
+            }
         } else if (c == '/') {
-            add_token(tokens, token_count, T_SLASH, "/");
+            if ((c = fgetc(infile)) == '=') {
+                add_token(tokens, token_count, T_SLASH_ASSIGN, "/=");
+            } else {
+                ungetc(c, infile);
+                add_token(tokens, token_count, T_SLASH, "/");
+            }
         } else if (c == '%') {
-            add_token(tokens, token_count, T_PERCENT, "%");
+            if ((c = fgetc(infile)) == '=') {
+                add_token(tokens, token_count, T_PERCENT_ASSIGN, "%=");
+            } else {
+                ungetc(c, infile);
+                add_token(tokens, token_count, T_PERCENT, "%");
+            }
         } else if (c == '&') {
             if ((c = fgetc(infile)) == '&') {
                 add_token(tokens, token_count, T_LOGICAL_AND, "&&");
+            } else if (c == '=') {
+                add_token(tokens, token_count, T_AMPERSAND_ASSIGN, "&=");
             } else {
                 ungetc(c, infile);
                 add_token(tokens, token_count, T_AMPERSAND, "&");
@@ -64,12 +99,19 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
         } else if (c == '|') {
             if ((c = fgetc(infile)) == '|') {
                 add_token(tokens, token_count, T_LOGICAL_OR, "||");
+            } else if (c == '=') {
+                add_token(tokens, token_count, T_PIPE_ASSIGN, "|=");
             } else {
                 ungetc(c, infile);
                 add_token(tokens, token_count, T_PIPE, "|");
             }
         } else if (c == '^') {
-            add_token(tokens, token_count, T_CARET, "^");
+            if ((c = fgetc(infile)) == '=') {
+                add_token(tokens, token_count, T_CARET_ASSIGN, "^=");
+            } else {
+                ungetc(c, infile);
+                add_token(tokens, token_count, T_CARET, "^");
+            }
         } else if (c == '=') {
             if ((c = fgetc(infile)) == '=') {
                 add_token(tokens, token_count, T_EQUAL, "==");
@@ -78,14 +120,28 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
                 add_token(tokens, token_count, T_ASSIGN, "=");
             }
         } else if (c == '<') {
-            if ((c = fgetc(infile)) == '=') {
+            if ((c = fgetc(infile)) == '<') {
+                if ((c = fgetc(infile)) == '=') {
+                    add_token(tokens, token_count, T_SHIFT_LEFT_ASSIGN, "<<=");
+                } else {
+                    ungetc(c, infile);
+                    add_token(tokens, token_count, T_SHIFT_LEFT, "<<");
+                }
+            } else if (c == '=') {
                 add_token(tokens, token_count, T_LESS_EQUAL, "<=");
             } else {
                 ungetc(c, infile);
                 add_token(tokens, token_count, T_LESS, "<");
             }
         } else if (c == '>') {
-            if ((c = fgetc(infile)) == '=') {
+            if ((c = fgetc(infile)) == '>') {
+                if ((c = fgetc(infile)) == '=') {
+                    add_token(tokens, token_count, T_SHIFT_RIGHT_ASSIGN, ">>=");
+                } else {
+                    ungetc(c, infile);
+                    add_token(tokens, token_count, T_SHIFT_RIGHT, ">>");
+                }
+            } else if (c == '=') {
                 add_token(tokens, token_count, T_GREATER_EQUAL, ">=");
             } else {
                 ungetc(c, infile);
@@ -99,8 +155,18 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
             ungetc(c, infile);
             buffer[buffer_index] = '\0';
 
-            if (strcmp(buffer, "int") == 0) {
+            if (strcmp(buffer, "char") == 0) {
+                add_token(tokens, token_count, T_CHAR, buffer);
+            } else if (strcmp(buffer, "short") == 0) {
+                add_token(tokens, token_count, T_SHORT, buffer);
+            } else if (strcmp(buffer, "int") == 0) {
                 add_token(tokens, token_count, T_INT, buffer);
+            } else if (strcmp(buffer, "long") == 0) {
+                add_token(tokens, token_count, T_LONG, buffer);
+            } else if (strcmp(buffer, "signed") == 0) {
+                add_token(tokens, token_count, T_SIGNED, buffer);
+            } else if (strcmp(buffer, "unsigned") == 0) {
+                add_token(tokens, token_count, T_UNSIGNED, buffer);
             } else if (strcmp(buffer, "return") == 0) {
                 add_token(tokens, token_count, T_RETURN, buffer);
             } else if (strcmp(buffer, "if") == 0) {
@@ -115,6 +181,8 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
                 add_token(tokens, token_count, T_BREAK, buffer);
             } else if (strcmp(buffer, "continue") == 0) {
                 add_token(tokens, token_count, T_CONTINUE, buffer);
+            } else if (strcmp(buffer, "sizeof") == 0) {
+                add_token(tokens, token_count, T_SIZEOF, buffer);
             } else {
                 add_token(tokens, token_count, T_IDENTIFIER, buffer);
             }

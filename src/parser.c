@@ -4,6 +4,44 @@
 #include <string.h>
 #include "decl.h"
 
+static const char* parse_type_name(struct token *tokens, int *token_index)
+{
+    int is_unsigned = 0;
+    int has_sign = 0;
+    TokenType base_type;
+
+    if (tokens[*token_index].type == T_SIGNED || tokens[*token_index].type == T_UNSIGNED) {
+        is_unsigned = tokens[*token_index].type == T_UNSIGNED;
+        has_sign = 1;
+        (*token_index)++;
+    }
+
+    base_type = tokens[*token_index].type;
+    if (base_type == T_CHAR || base_type == T_SHORT || base_type == T_INT || base_type == T_LONG) {
+        (*token_index)++;
+    } else if (has_sign) {
+        base_type = T_INT;
+    } else {
+        return NULL;
+    }
+
+    if ((base_type == T_SHORT || base_type == T_LONG) && tokens[*token_index].type == T_INT) {
+        (*token_index)++;
+    }
+
+    if (base_type == T_CHAR) {
+        return is_unsigned ? "uchar" : "char";
+    }
+    if (base_type == T_SHORT) {
+        return is_unsigned ? "ushort" : "short";
+    }
+    if (base_type == T_LONG) {
+        return is_unsigned ? "ulong" : "long";
+    }
+
+    return is_unsigned ? "uint" : "int";
+}
+
 struct ast_node* parse_program(struct token *tokens, int *token_index)
 {
     return create_ast_node(AST_PROGRAM, NULL, parse_function_list(tokens, token_index), NULL);
@@ -343,7 +381,36 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
 {
     struct token *tok = &tokens[*token_index];
 
-    if (tok->type == T_MINUS) {
+    if (tok->type == T_PLUS_PLUS) {
+        (*token_index)++;
+        struct ast_node *operand = parse_factor(tokens, token_index);
+        if (operand->type != AST_IDENTIFIER) {
+            fprintf(stderr, "Operand of prefix ++ must be an identifier\n");
+            exit(1);
+        }
+        return create_ast_node(AST_PRE_INCREMENT, NULL, operand, NULL);
+    } else if (tok->type == T_MINUS_MINUS) {
+        (*token_index)++;
+        struct ast_node *operand = parse_factor(tokens, token_index);
+        if (operand->type != AST_IDENTIFIER) {
+            fprintf(stderr, "Operand of prefix -- must be an identifier\n");
+            exit(1);
+        }
+        return create_ast_node(AST_PRE_DECREMENT, NULL, operand, NULL);
+    } else if (tok->type == T_SIZEOF) {
+        (*token_index)++;
+        if (tokens[*token_index].type == T_OPENPAREN) {
+            int type_index = *token_index + 1;
+            const char *type_name = parse_type_name(tokens, &type_index);
+            if (type_name && tokens[type_index].type == T_CLOSEPAREN) {
+                *token_index = type_index + 1;
+                return create_ast_node(AST_SIZEOF, (char *)type_name, NULL, NULL);
+            }
+        }
+
+        parse_factor(tokens, token_index);
+        return create_ast_node(AST_SIZEOF, "int", NULL, NULL);
+    } else if (tok->type == T_MINUS) {
         (*token_index)++;
         return create_ast_node(AST_NEGATION, NULL, parse_factor(tokens, token_index), NULL);
     } else if (tok->type == T_LOGICAL_NEGATION) {
@@ -372,14 +439,35 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
                 exit(1);
             }
             (*token_index)++;
-            return create_ast_node(AST_CALL, name, args, NULL);
+            struct ast_node *call = create_ast_node(AST_CALL, name, args, NULL);
+            if (tokens[*token_index].type == T_PLUS_PLUS || tokens[*token_index].type == T_MINUS_MINUS) {
+                fprintf(stderr, "Postfix increment/decrement requires an identifier\n");
+                exit(1);
+            }
+            return call;
         }
 
-        return create_ast_node(AST_IDENTIFIER, name, NULL, NULL);
+        struct ast_node *id = create_ast_node(AST_IDENTIFIER, name, NULL, NULL);
+        if (tokens[*token_index].type == T_PLUS_PLUS) {
+            (*token_index)++;
+            return create_ast_node(AST_POST_INCREMENT, NULL, id, NULL);
+        } else if (tokens[*token_index].type == T_MINUS_MINUS) {
+            (*token_index)++;
+            return create_ast_node(AST_POST_DECREMENT, NULL, id, NULL);
+        }
+
+        return id;
     }
 
     if (tok->type == T_OPENPAREN) {
         (*token_index)++;
+        int type_index = *token_index;
+        const char *type_name = parse_type_name(tokens, &type_index);
+        if (type_name && tokens[type_index].type == T_CLOSEPAREN) {
+            *token_index = type_index + 1;
+            return create_ast_node(AST_CAST, (char *)type_name, parse_factor(tokens, token_index), NULL);
+        }
+
         struct ast_node *inner_exp = parse_exp(tokens, token_index);
         tok = &tokens[*token_index];
         if (tok->type != T_CLOSEPAREN) {
@@ -400,7 +488,7 @@ struct ast_node* parse_arg_list(struct token *tokens, int *token_index)
         return NULL;
     }
 
-    struct ast_node *arg = parse_exp(tokens, token_index);
+    struct ast_node *arg = parse_assignment(tokens, token_index);
     struct ast_node *rest = NULL;
 
     if (tokens[*token_index].type == T_COMMA) {
@@ -437,24 +525,88 @@ struct ast_node* parse_term(struct token *tokens, int *token_index)
 
 struct ast_node* parse_exp(struct token *tokens, int *token_index)
 {
-    return parse_assignment(tokens, token_index);
+    return parse_comma(tokens, token_index);
+}
+
+struct ast_node* parse_comma(struct token *tokens, int *token_index)
+{
+    struct ast_node *left = parse_assignment(tokens, token_index);
+
+    while (tokens[*token_index].type == T_COMMA) {
+        (*token_index)++;
+        left = create_ast_node(AST_COMMA, NULL, left, parse_assignment(tokens, token_index));
+    }
+
+    return left;
 }
 
 struct ast_node* parse_assignment(struct token *tokens, int *token_index)
 {
-    struct ast_node *left = parse_logical_or(tokens, token_index);
+    struct ast_node *left = parse_conditional(tokens, token_index);
+    TokenType op = tokens[*token_index].type;
 
-    if (tokens[*token_index].type == T_ASSIGN) {
+    if (op == T_ASSIGN || op == T_PLUS_ASSIGN || op == T_MINUS_ASSIGN ||
+        op == T_STAR_ASSIGN || op == T_SLASH_ASSIGN || op == T_PERCENT_ASSIGN ||
+        op == T_AMPERSAND_ASSIGN || op == T_PIPE_ASSIGN || op == T_CARET_ASSIGN ||
+        op == T_SHIFT_LEFT_ASSIGN || op == T_SHIFT_RIGHT_ASSIGN) {
         if (left->type != AST_IDENTIFIER) {
             fprintf(stderr, "Left side of assignment must be an identifier\n");
             exit(1);
         }
 
         (*token_index)++;
-        return create_ast_node(AST_ASSIGN, NULL, left, parse_assignment(tokens, token_index));
+        struct ast_node *right = parse_assignment(tokens, token_index);
+
+        if (op == T_ASSIGN) {
+            return create_ast_node(AST_ASSIGN, NULL, left, right);
+        }
+
+        ASTNodeType binop = AST_ADD;
+        if (op == T_MINUS_ASSIGN) binop = AST_SUB;
+        else if (op == T_STAR_ASSIGN) binop = AST_MUL;
+        else if (op == T_SLASH_ASSIGN) binop = AST_DIV;
+        else if (op == T_PERCENT_ASSIGN) binop = AST_MOD;
+        else if (op == T_AMPERSAND_ASSIGN) binop = AST_BITWISE_AND;
+        else if (op == T_PIPE_ASSIGN) binop = AST_BITWISE_OR;
+        else if (op == T_CARET_ASSIGN) binop = AST_BITWISE_XOR;
+        else if (op == T_SHIFT_LEFT_ASSIGN) binop = AST_SHIFT_LEFT;
+        else if (op == T_SHIFT_RIGHT_ASSIGN) binop = AST_SHIFT_RIGHT;
+
+        return create_ast_node(
+            AST_ASSIGN,
+            NULL,
+            left,
+            create_ast_node(binop, NULL, create_ast_node(AST_IDENTIFIER, left->value, NULL, NULL), right)
+        );
     }
 
     return left;
+}
+
+struct ast_node* parse_conditional(struct token *tokens, int *token_index)
+{
+    struct ast_node *cond = parse_logical_or(tokens, token_index);
+
+    if (tokens[*token_index].type == T_QUESTION) {
+        (*token_index)++;
+        struct ast_node *then_exp = parse_exp(tokens, token_index);
+
+        if (tokens[*token_index].type != T_COLON) {
+            fprintf(stderr, "Expected ':' in conditional expression, found %s\n", tokens[*token_index].value);
+            exit(1);
+        }
+        (*token_index)++;
+
+        struct ast_node *else_exp = parse_conditional(tokens, token_index);
+        return create_ast_node(
+            AST_CONDITIONAL,
+            NULL,
+            cond,
+            create_ast_node(AST_CONDITIONAL_BRANCHES, NULL, then_exp, else_exp)
+        );
+    }
+
+    return cond;
 }
 
 struct ast_node* parse_logical_or(struct token *tokens, int *token_index)
@@ -540,23 +692,44 @@ struct ast_node* parse_equality(struct token *tokens, int *token_index)
 
 struct ast_node* parse_relational(struct token *tokens, int *token_index)
 {
-    struct ast_node *left = parse_additive(tokens, token_index);
+    struct ast_node *left = parse_shift(tokens, token_index);
 
     while (1) {
         struct token *tok = &tokens[*token_index];
 
         if (tok->type == T_LESS) {
             (*token_index)++;
-            left = create_ast_node(AST_LESS, NULL, left, parse_additive(tokens, token_index));
+            left = create_ast_node(AST_LESS, NULL, left, parse_shift(tokens, token_index));
         } else if (tok->type == T_LESS_EQUAL) {
             (*token_index)++;
-            left = create_ast_node(AST_LESS_EQUAL, NULL, left, parse_additive(tokens, token_index));
+            left = create_ast_node(AST_LESS_EQUAL, NULL, left, parse_shift(tokens, token_index));
         } else if (tok->type == T_GREATER) {
             (*token_index)++;
-            left = create_ast_node(AST_GREATER, NULL, left, parse_additive(tokens, token_index));
+            left = create_ast_node(AST_GREATER, NULL, left, parse_shift(tokens, token_index));
         } else if (tok->type == T_GREATER_EQUAL) {
             (*token_index)++;
-            left = create_ast_node(AST_GREATER_EQUAL, NULL, left, parse_additive(tokens, token_index));
+            left = create_ast_node(AST_GREATER_EQUAL, NULL, left, parse_shift(tokens, token_index));
+        } else {
+            break;
+        }
+    }
+
+    return left;
+}
+
+struct ast_node* parse_shift(struct token *tokens, int *token_index)
+{
+    struct ast_node *left = parse_additive(tokens, token_index);
+
+    while (1) {
+        struct token *tok = &tokens[*token_index];
+
+        if (tok->type == T_SHIFT_LEFT) {
+            (*token_index)++;
+            left = create_ast_node(AST_SHIFT_LEFT, NULL, left, parse_additive(tokens, token_index));
+        } else if (tok->type == T_SHIFT_RIGHT) {
+            (*token_index)++;
+            left = create_ast_node(AST_SHIFT_RIGHT, NULL, left, parse_additive(tokens, token_index));
         } else {
             break;
         }
