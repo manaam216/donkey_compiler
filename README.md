@@ -15,6 +15,7 @@ integer-returning functions.
 |   |-- main.c        CLI entry point
 |   |-- lexer.c       Tokenizer
 |   |-- parser.c      Recursive descent parser and AST allocation
+|   |-- semantic.c    Name, scope, and function-call validation
 |   `-- codegen.c     Assembly generator
 |-- examples/         Source examples and reference assembly
 |   |-- sample.c
@@ -145,8 +146,10 @@ Supported expression features:
 - Logical operators: `&&`, `||`
 - Assignment expression: `x = expression`
 - Local declarations: `int x;` and `int x = expression;`
+- Integer declarations and parameters using signed/unsigned `char`, `short`,
+  `int`, and `long`
 - Multiple statements inside a function body
-- Multiple zero-argument `int` functions per input file
+- Multiple integer-returning functions per input file
 - Function parameters: `int helper(int x, int y)`
 - Function calls with arguments: `helper(x, 4)`
 - Global variables: `int g;` and `int g = constant_expression;`
@@ -165,6 +168,19 @@ Supported expression features:
   `(short)x`, `(unsigned short)x`, `(int)x`, `(long)x`, and signed/unsigned
   int/long variants
 - Comments: `// line comments` and `/* block comments */`
+
+Before generating assembly, Donkey performs semantic analysis. It rejects
+duplicate declarations, undeclared variables and functions, calls with the
+wrong number of arguments, non-constant global initializers, and `break` or
+`continue` statements outside loops. Function signatures are collected before
+function bodies are checked, so calls to functions defined later in the file
+are valid.
+
+Expressions use C-style integer promotions and usual arithmetic conversions.
+Assignments, arguments, and return values are converted to their destination
+types; unsigned division, comparisons, and right shifts use unsigned machine
+operations. All current integer types occupy four-byte storage slots, while
+`char` and `short` values are narrowed and sign- or zero-extended as required.
 
 Local variables are stored in a simple stack frame. Assignment leaves the
 assigned value in `%eax`, so it can be used inside larger expressions.
@@ -195,7 +211,8 @@ This removes the `build/` directory.
 
 ## Current Limitations
 
-- No nested block scopes or variable shadowing yet
+- Nested blocks have lexical visibility, but variable shadowing is rejected
+  until the code generator assigns symbols unique storage identities
 - Global initializers must be constant expressions
 - Assembly output is for learning and demonstration, not a complete production
   toolchain

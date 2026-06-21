@@ -26,6 +26,13 @@ int main(int argc, char *argv[])
     int token_index = 0;
     struct ast_node *ast = parse_program(tokens, &token_index);
 
+    if (!semantic_analyze(ast)) {
+        free_ast_node(ast);
+        free_tokens(tokens, token_count);
+        fclose(infile);
+        return EXIT_FAILURE;
+    }
+
     write_assembly_to_file(output_file, ast);
     printf("Compiled %s -> %s\n", argv[1], output_file);
 

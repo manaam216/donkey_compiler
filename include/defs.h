@@ -120,8 +120,21 @@ typedef enum {
     AST_COMMA
 } ASTNodeType;
 
+typedef enum {
+    TYPE_INVALID,
+    TYPE_CHAR,
+    TYPE_UCHAR,
+    TYPE_SHORT,
+    TYPE_USHORT,
+    TYPE_INT,
+    TYPE_UINT,
+    TYPE_LONG,
+    TYPE_ULONG
+} CType;
+
 struct ast_node {
     ASTNodeType type;
+    CType data_type;
     struct ast_node *left;
     struct ast_node *right;
     char *value;

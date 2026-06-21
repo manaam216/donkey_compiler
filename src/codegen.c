@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include "defs.h"
@@ -238,6 +239,35 @@ static void generate_cast(const char *type, FILE *output)
     }
 }
 
+static const char *codegen_type_name(CType type)
+{
+    switch (type) {
+        case TYPE_CHAR: return "char";
+        case TYPE_UCHAR: return "uchar";
+        case TYPE_SHORT: return "short";
+        case TYPE_USHORT: return "ushort";
+        case TYPE_UINT: return "uint";
+        case TYPE_LONG: return "long";
+        case TYPE_ULONG: return "ulong";
+        default: return "int";
+    }
+}
+
+static int is_unsigned_type(CType type)
+{
+    return type == TYPE_UCHAR || type == TYPE_USHORT ||
+        type == TYPE_UINT || type == TYPE_ULONG;
+}
+
+static int cast_constant(int value, const char *type)
+{
+    if (strcmp(type, "char") == 0) return (int)(int8_t)value;
+    if (strcmp(type, "uchar") == 0) return (int)(uint8_t)value;
+    if (strcmp(type, "short") == 0) return (int)(int16_t)value;
+    if (strcmp(type, "ushort") == 0) return (int)(uint16_t)value;
+    return value;
+}
+
 static int eval_const_exp(struct ast_node *node)
 {
     if (!node) {
@@ -260,12 +290,20 @@ static int eval_const_exp(struct ast_node *node)
         case AST_MUL:
             return eval_const_exp(node->left) * eval_const_exp(node->right);
         case AST_DIV:
+            if (is_unsigned_type(node->left->data_type))
+                return (int)((uint32_t)eval_const_exp(node->left) /
+                    (uint32_t)eval_const_exp(node->right));
             return eval_const_exp(node->left) / eval_const_exp(node->right);
         case AST_MOD:
+            if (is_unsigned_type(node->left->data_type))
+                return (int)((uint32_t)eval_const_exp(node->left) %
+                    (uint32_t)eval_const_exp(node->right));
             return eval_const_exp(node->left) % eval_const_exp(node->right);
         case AST_SHIFT_LEFT:
             return eval_const_exp(node->left) << eval_const_exp(node->right);
         case AST_SHIFT_RIGHT:
+            if (is_unsigned_type(node->left->data_type))
+                return (int)((uint32_t)eval_const_exp(node->left) >> eval_const_exp(node->right));
             return eval_const_exp(node->left) >> eval_const_exp(node->right);
         case AST_BITWISE_AND:
             return eval_const_exp(node->left) & eval_const_exp(node->right);
@@ -282,12 +320,20 @@ static int eval_const_exp(struct ast_node *node)
         case AST_NOT_EQUAL:
             return eval_const_exp(node->left) != eval_const_exp(node->right);
         case AST_LESS:
+            if (is_unsigned_type(node->left->data_type))
+                return (uint32_t)eval_const_exp(node->left) < (uint32_t)eval_const_exp(node->right);
             return eval_const_exp(node->left) < eval_const_exp(node->right);
         case AST_LESS_EQUAL:
+            if (is_unsigned_type(node->left->data_type))
+                return (uint32_t)eval_const_exp(node->left) <= (uint32_t)eval_const_exp(node->right);
             return eval_const_exp(node->left) <= eval_const_exp(node->right);
         case AST_GREATER:
+            if (is_unsigned_type(node->left->data_type))
+                return (uint32_t)eval_const_exp(node->left) > (uint32_t)eval_const_exp(node->right);
             return eval_const_exp(node->left) > eval_const_exp(node->right);
         case AST_GREATER_EQUAL:
+            if (is_unsigned_type(node->left->data_type))
+                return (uint32_t)eval_const_exp(node->left) >= (uint32_t)eval_const_exp(node->right);
             return eval_const_exp(node->left) >= eval_const_exp(node->right);
         case AST_CONDITIONAL:
             return eval_const_exp(node->left) ? eval_const_exp(node->right->left) : eval_const_exp(node->right->right);
@@ -296,7 +342,7 @@ static int eval_const_exp(struct ast_node *node)
         case AST_SIZEOF:
             return type_size(node->value);
         case AST_CAST:
-            return eval_const_exp(node->left);
+            return cast_constant(eval_const_exp(node->left), node->value);
         default:
             fprintf(stderr, "Global initializer must be a constant expression\n");
             exit(1);
@@ -494,6 +540,8 @@ void generate_statement(struct ast_node *node, FILE *output)
 
 void generate_binop(struct ast_node *node, FILE *output)
 {
+    int is_unsigned = is_unsigned_type(node->left->data_type);
+
     generate_exp(node->left, output);
     fprintf(output, "    push    %%eax\n");
 
@@ -515,15 +563,25 @@ void generate_binop(struct ast_node *node, FILE *output)
             fprintf(output, "    push    %%eax\n");
             fprintf(output, "    movl    %%edx, %%eax\n");
             fprintf(output, "    pop     %%ecx\n");
-            fprintf(output, "    cdq\n");
-            fprintf(output, "    idivl   %%ecx\n");
+            if (is_unsigned) {
+                fprintf(output, "    xorl    %%edx, %%edx\n");
+                fprintf(output, "    divl    %%ecx\n");
+            } else {
+                fprintf(output, "    cdq\n");
+                fprintf(output, "    idivl   %%ecx\n");
+            }
             break;
         case AST_MOD:
             fprintf(output, "    push    %%eax\n");
             fprintf(output, "    movl    %%edx, %%eax\n");
             fprintf(output, "    pop     %%ecx\n");
-            fprintf(output, "    cdq\n");
-            fprintf(output, "    idivl   %%ecx\n");
+            if (is_unsigned) {
+                fprintf(output, "    xorl    %%edx, %%edx\n");
+                fprintf(output, "    divl    %%ecx\n");
+            } else {
+                fprintf(output, "    cdq\n");
+                fprintf(output, "    idivl   %%ecx\n");
+            }
             fprintf(output, "    movl    %%edx, %%eax\n");
             break;
         case AST_SHIFT_LEFT:
@@ -534,7 +592,7 @@ void generate_binop(struct ast_node *node, FILE *output)
         case AST_SHIFT_RIGHT:
             fprintf(output, "    movl    %%eax, %%ecx\n");
             fprintf(output, "    movl    %%edx, %%eax\n");
-            fprintf(output, "    sarl    %%cl, %%eax\n");
+            fprintf(output, is_unsigned ? "    shrl    %%cl, %%eax\n" : "    sarl    %%cl, %%eax\n");
             break;
         case AST_BITWISE_AND:
             fprintf(output, "    andl    %%edx, %%eax\n");
@@ -558,22 +616,22 @@ void generate_binop(struct ast_node *node, FILE *output)
         case AST_LESS:
             fprintf(output, "    cmpl    %%eax, %%edx\n");
             fprintf(output, "    movl    $0, %%eax\n");
-            fprintf(output, "    setl    %%al\n");
+            fprintf(output, is_unsigned ? "    setb    %%al\n" : "    setl    %%al\n");
             break;
         case AST_LESS_EQUAL:
             fprintf(output, "    cmpl    %%eax, %%edx\n");
             fprintf(output, "    movl    $0, %%eax\n");
-            fprintf(output, "    setle   %%al\n");
+            fprintf(output, is_unsigned ? "    setbe   %%al\n" : "    setle   %%al\n");
             break;
         case AST_GREATER:
             fprintf(output, "    cmpl    %%eax, %%edx\n");
             fprintf(output, "    movl    $0, %%eax\n");
-            fprintf(output, "    setg    %%al\n");
+            fprintf(output, is_unsigned ? "    seta    %%al\n" : "    setg    %%al\n");
             break;
         case AST_GREATER_EQUAL:
             fprintf(output, "    cmpl    %%eax, %%edx\n");
             fprintf(output, "    movl    $0, %%eax\n");
-            fprintf(output, "    setge   %%al\n");
+            fprintf(output, is_unsigned ? "    setae   %%al\n" : "    setge   %%al\n");
             break;
         default:
             fprintf(stderr, "Unsupported operation in AST\n");
@@ -675,17 +733,20 @@ void generate_exp(struct ast_node *node, FILE *output)
         case AST_PRE_INCREMENT:
             generate_identifier_load(node->left->value, output);
             fprintf(output, "    addl    $1, %%eax\n");
+            generate_cast(codegen_type_name(node->data_type), output);
             generate_identifier_store(node->left->value, output);
             break;
         case AST_PRE_DECREMENT:
             generate_identifier_load(node->left->value, output);
             fprintf(output, "    subl    $1, %%eax\n");
+            generate_cast(codegen_type_name(node->data_type), output);
             generate_identifier_store(node->left->value, output);
             break;
         case AST_POST_INCREMENT:
             generate_identifier_load(node->left->value, output);
             fprintf(output, "    push    %%eax\n");
             fprintf(output, "    addl    $1, %%eax\n");
+            generate_cast(codegen_type_name(node->data_type), output);
             generate_identifier_store(node->left->value, output);
             fprintf(output, "    pop     %%eax\n");
             break;
@@ -693,6 +754,7 @@ void generate_exp(struct ast_node *node, FILE *output)
             generate_identifier_load(node->left->value, output);
             fprintf(output, "    push    %%eax\n");
             fprintf(output, "    subl    $1, %%eax\n");
+            generate_cast(codegen_type_name(node->data_type), output);
             generate_identifier_store(node->left->value, output);
             fprintf(output, "    pop     %%eax\n");
             break;
