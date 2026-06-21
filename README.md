@@ -15,6 +15,7 @@ integer-returning functions.
 |   |-- main.c        CLI entry point
 |   |-- lexer.c       Tokenizer
 |   |-- parser.c      Recursive descent parser and AST allocation
+|   |-- semantic.c    Name, scope, and function-call validation
 |   `-- codegen.c     Assembly generator
 |-- examples/         Source examples and reference assembly
 |   |-- sample.c
@@ -166,6 +167,13 @@ Supported expression features:
   int/long variants
 - Comments: `// line comments` and `/* block comments */`
 
+Before generating assembly, Donkey performs semantic analysis. It rejects
+duplicate declarations, undeclared variables and functions, calls with the
+wrong number of arguments, non-constant global initializers, and `break` or
+`continue` statements outside loops. Function signatures are collected before
+function bodies are checked, so calls to functions defined later in the file
+are valid.
+
 Local variables are stored in a simple stack frame. Assignment leaves the
 assigned value in `%eax`, so it can be used inside larger expressions.
 
@@ -195,7 +203,8 @@ This removes the `build/` directory.
 
 ## Current Limitations
 
-- No nested block scopes or variable shadowing yet
+- Nested blocks have lexical visibility, but variable shadowing is rejected
+  until the code generator assigns symbols unique storage identities
 - Global initializers must be constant expressions
 - Assembly output is for learning and demonstration, not a complete production
   toolchain

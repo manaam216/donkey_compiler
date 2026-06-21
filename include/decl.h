@@ -40,6 +40,8 @@ struct ast_node* parse_term(struct token *tokens, int *token_index);
 struct ast_node* parse_factor(struct token *tokens, int *token_index);
 struct ast_node* parse_arg_list(struct token *tokens, int *token_index);
 
+int semantic_analyze(struct ast_node *ast);
+
 char* generate(struct ast_node *ast);
 void generate_function(struct ast_node *node, FILE *output);
 void generate_program(struct ast_node *node, FILE *output);
