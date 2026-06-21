@@ -23,6 +23,7 @@ mkdir -p "$build_dir"
 "$compiler" examples/casts.c "$build_dir/casts.asm"
 "$compiler" examples/comments.c "$build_dir/comments.asm"
 "$compiler" examples/globals.c "$build_dir/globals.asm"
+"$compiler" examples/types.c "$build_dir/types.asm"
 "$compiler" tests/semantic/valid_forward_call.c "$build_dir/valid_forward_call.asm"
 
 expect_semantic_error() {
@@ -81,6 +82,7 @@ awk '
 "$cc" -x assembler "$build_dir/casts.asm" -o "$build_dir/casts.exe"
 "$cc" -x assembler "$build_dir/comments.asm" -o "$build_dir/comments.exe"
 "$cc" -x assembler "$build_dir/globals.asm" -o "$build_dir/globals.exe"
+"$cc" -x assembler "$build_dir/types.asm" -o "$build_dir/types.exe"
 "$cc" -x assembler "$build_dir/valid_forward_call.asm" -o "$build_dir/valid_forward_call.exe"
 
 run_and_expect() {
@@ -110,6 +112,7 @@ run_and_expect "$build_dir/missing_ops.exe" 52
 run_and_expect "$build_dir/casts.exe" 29
 run_and_expect "$build_dir/comments.exe" 12
 run_and_expect "$build_dir/globals.exe" 21
+run_and_expect "$build_dir/types.exe" 162
 run_and_expect "$build_dir/valid_forward_call.exe" 5
 
 echo "All compiler checks passed."

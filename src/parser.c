@@ -42,6 +42,24 @@ static const char* parse_type_name(struct token *tokens, int *token_index)
     return is_unsigned ? "uint" : "int";
 }
 
+static CType type_from_name(const char *name)
+{
+    if (strcmp(name, "char") == 0) return TYPE_CHAR;
+    if (strcmp(name, "uchar") == 0) return TYPE_UCHAR;
+    if (strcmp(name, "short") == 0) return TYPE_SHORT;
+    if (strcmp(name, "ushort") == 0) return TYPE_USHORT;
+    if (strcmp(name, "uint") == 0) return TYPE_UINT;
+    if (strcmp(name, "long") == 0) return TYPE_LONG;
+    if (strcmp(name, "ulong") == 0) return TYPE_ULONG;
+    return TYPE_INT;
+}
+
+static int is_type_start(TokenType type)
+{
+    return type == T_CHAR || type == T_SHORT || type == T_INT ||
+        type == T_LONG || type == T_SIGNED || type == T_UNSIGNED;
+}
+
 struct ast_node* parse_program(struct token *tokens, int *token_index)
 {
     return create_ast_node(AST_PROGRAM, NULL, parse_function_list(tokens, token_index), NULL);
@@ -61,17 +79,19 @@ struct ast_node* parse_function_list(struct token *tokens, int *token_index)
 
 struct ast_node* parse_external_declaration(struct token *tokens, int *token_index)
 {
-    if (tokens[*token_index].type != T_INT) {
+    int name_index = *token_index;
+
+    if (!parse_type_name(tokens, &name_index)) {
         fprintf(stderr, "Expected top-level declaration, found %s\n", tokens[*token_index].value);
         exit(1);
     }
 
-    if (tokens[*token_index + 1].type != T_IDENTIFIER) {
-        fprintf(stderr, "Expected identifier in top-level declaration, found %s\n", tokens[*token_index + 1].value);
+    if (tokens[name_index].type != T_IDENTIFIER) {
+        fprintf(stderr, "Expected identifier in top-level declaration, found %s\n", tokens[name_index].value);
         exit(1);
     }
 
-    if (tokens[*token_index + 2].type == T_OPENPAREN) {
+    if (tokens[name_index + 1].type == T_OPENPAREN) {
         return parse_function(tokens, token_index);
     }
 
@@ -80,13 +100,13 @@ struct ast_node* parse_external_declaration(struct token *tokens, int *token_ind
 
 struct ast_node* parse_function(struct token *tokens, int *token_index)
 {
-    struct token *tok = &tokens[*token_index];
+    const char *type_name = parse_type_name(tokens, token_index);
+    struct token *tok;
 
-    if (tok->type != T_INT) {
-        fprintf(stderr, "Expected 'int', found %s\n", tok->value);
+    if (!type_name) {
+        fprintf(stderr, "Expected function return type, found %s\n", tokens[*token_index].value);
         exit(1);
     }
-    (*token_index)++;
 
     tok = &tokens[*token_index];
     if (tok->type != T_IDENTIFIER) {
@@ -115,12 +135,14 @@ struct ast_node* parse_function(struct token *tokens, int *token_index)
 
     struct ast_node *body = parse_block(tokens, token_index);
 
-    return create_ast_node(AST_FUNCTION, func_name, params, body);
+    struct ast_node *function = create_ast_node(AST_FUNCTION, func_name, params, body);
+    function->data_type = type_from_name(type_name);
+    return function;
 }
 
 struct ast_node* parse_global_declaration(struct token *tokens, int *token_index)
 {
-    (*token_index)++;
+    const char *type_name = parse_type_name(tokens, token_index);
 
     struct token *tok = &tokens[*token_index];
     if (tok->type != T_IDENTIFIER) {
@@ -143,7 +165,9 @@ struct ast_node* parse_global_declaration(struct token *tokens, int *token_index
     }
     (*token_index)++;
 
-    return create_ast_node(AST_GLOBAL_DECL, name, initializer, NULL);
+    struct ast_node *declaration = create_ast_node(AST_GLOBAL_DECL, name, initializer, NULL);
+    declaration->data_type = type_from_name(type_name);
+    return declaration;
 }
 
 struct ast_node* parse_param_list(struct token *tokens, int *token_index)
@@ -152,11 +176,11 @@ struct ast_node* parse_param_list(struct token *tokens, int *token_index)
         return NULL;
     }
 
-    if (tokens[*token_index].type != T_INT) {
-        fprintf(stderr, "Expected parameter type 'int', found %s\n", tokens[*token_index].value);
+    const char *type_name = parse_type_name(tokens, token_index);
+    if (!type_name) {
+        fprintf(stderr, "Expected parameter type, found %s\n", tokens[*token_index].value);
         exit(1);
     }
-    (*token_index)++;
 
     struct token *tok = &tokens[*token_index];
     if (tok->type != T_IDENTIFIER) {
@@ -165,6 +189,7 @@ struct ast_node* parse_param_list(struct token *tokens, int *token_index)
     }
 
     struct ast_node *param = create_ast_node(AST_IDENTIFIER, tok->value, NULL, NULL);
+    param->data_type = type_from_name(type_name);
     (*token_index)++;
 
     struct ast_node *rest = NULL;
@@ -218,7 +243,7 @@ struct ast_node* parse_statement(struct token *tokens, int *token_index)
         return parse_block(tokens, token_index);
     }
 
-    if (tok->type == T_INT) {
+    if (is_type_start(tok->type)) {
         return parse_declaration(tokens, token_index);
     }
 
@@ -285,7 +310,7 @@ struct ast_node* parse_statement(struct token *tokens, int *token_index)
 
 struct ast_node* parse_declaration(struct token *tokens, int *token_index)
 {
-    (*token_index)++;
+    const char *type_name = parse_type_name(tokens, token_index);
 
     struct token *tok = &tokens[*token_index];
     if (tok->type != T_IDENTIFIER) {
@@ -309,7 +334,9 @@ struct ast_node* parse_declaration(struct token *tokens, int *token_index)
     }
     (*token_index)++;
 
-    return create_ast_node(AST_DECL, name, initializer, NULL);
+    struct ast_node *declaration = create_ast_node(AST_DECL, name, initializer, NULL);
+    declaration->data_type = type_from_name(type_name);
+    return declaration;
 }
 
 struct ast_node* parse_if_statement(struct token *tokens, int *token_index)
@@ -401,7 +428,7 @@ struct ast_node* parse_for_init(struct token *tokens, int *token_index)
         return NULL;
     }
 
-    if (tokens[*token_index].type == T_INT) {
+    if (is_type_start(tokens[*token_index].type)) {
         return parse_declaration(tokens, token_index);
     }
 
@@ -451,12 +478,16 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
             const char *type_name = parse_type_name(tokens, &type_index);
             if (type_name && tokens[type_index].type == T_CLOSEPAREN) {
                 *token_index = type_index + 1;
-                return create_ast_node(AST_SIZEOF, (char *)type_name, NULL, NULL);
+                struct ast_node *size = create_ast_node(AST_SIZEOF, (char *)type_name, NULL, NULL);
+                size->data_type = TYPE_UINT;
+                return size;
             }
         }
 
         parse_factor(tokens, token_index);
-        return create_ast_node(AST_SIZEOF, "int", NULL, NULL);
+        struct ast_node *size = create_ast_node(AST_SIZEOF, "int", NULL, NULL);
+        size->data_type = TYPE_UINT;
+        return size;
     } else if (tok->type == T_MINUS) {
         (*token_index)++;
         return create_ast_node(AST_NEGATION, NULL, parse_factor(tokens, token_index), NULL);
@@ -512,7 +543,9 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
         const char *type_name = parse_type_name(tokens, &type_index);
         if (type_name && tokens[type_index].type == T_CLOSEPAREN) {
             *token_index = type_index + 1;
-            return create_ast_node(AST_CAST, (char *)type_name, parse_factor(tokens, token_index), NULL);
+            struct ast_node *cast = create_ast_node(AST_CAST, (char *)type_name, parse_factor(tokens, token_index), NULL);
+            cast->data_type = type_from_name(type_name);
+            return cast;
         }
 
         struct ast_node *inner_exp = parse_exp(tokens, token_index);
@@ -815,6 +848,7 @@ struct ast_node* create_ast_node(ASTNodeType type, char *value, struct ast_node 
     }
 
     node->type = type;
+    node->data_type = TYPE_INVALID;
     node->value = value ? strdup(value) : NULL;
     node->left = left;
     node->right = right;
