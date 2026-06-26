@@ -2,24 +2,87 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdarg.h>
 #include "defs.h"
 #include "decl.h"
 
-void lex(FILE *infile, struct token **tokens, int *token_count)
+static const char *lexer_source_path;
+static int current_line;
+static int current_column;
+static int last_line;
+static int last_column;
+static int previous_line;
+static int previous_column;
+static int token_line;
+static int token_column;
+
+static int tracked_fgetc(FILE *infile)
+{
+    int c;
+
+    previous_line = current_line;
+    previous_column = current_column;
+    c = fgetc(infile);
+    if (c == EOF) {
+        return EOF;
+    }
+
+    if (c == '\n') {
+        current_line++;
+        current_column = 0;
+    } else {
+        current_column++;
+    }
+
+    last_line = current_line;
+    last_column = c == '\n' ? 1 : current_column;
+    return c;
+}
+
+static void tracked_ungetc(int c, FILE *infile)
+{
+    if (c == EOF) {
+        return;
+    }
+    ungetc(c, infile);
+    current_line = previous_line;
+    current_column = previous_column;
+}
+
+#define fgetc tracked_fgetc
+#define ungetc tracked_ungetc
+
+static void lex_error_at(int line, int column, const char *format, ...)
+{
+    va_list args;
+
+    fprintf(stderr, "Lex error at %s:%d:%d: ", lexer_source_path, line, column);
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+    exit(EXIT_FAILURE);
+}
+
+void lex(FILE *infile, const char *source_path, struct token **tokens, int *token_count)
 {
     char c;
     char buffer[256];
     int buffer_index = 0;
-    int line = 1;
+
+    lexer_source_path = source_path;
+    current_line = 1;
+    current_column = 0;
+    last_line = 1;
+    last_column = 1;
 
     *tokens = NULL;
     *token_count = 0;
 
     while ((c = fgetc(infile)) != EOF) {
+        token_line = last_line;
+        token_column = last_column;
         if (isspace(c)) {
-            if (c == '\n') {
-                line++;
-            }
             continue;
         }
 
@@ -77,17 +140,13 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
             if ((c = fgetc(infile)) == '/') {
                 while ((c = fgetc(infile)) != EOF && c != '\n') {
                 }
-                if (c == '\n') {
-                    line++;
-                }
             } else if (c == '*') {
                 int prev = 0;
                 int closed = 0;
+                int comment_line = token_line;
+                int comment_column = token_column;
 
                 while ((c = fgetc(infile)) != EOF) {
-                    if (c == '\n') {
-                        line++;
-                    }
                     if (prev == '*' && c == '/') {
                         closed = 1;
                         break;
@@ -96,8 +155,7 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
                 }
 
                 if (!closed) {
-                    fprintf(stderr, "Error: Unterminated block comment on line %d\n", line);
-                    exit(EXIT_FAILURE);
+                    lex_error_at(comment_line, comment_column, "unterminated block comment");
                 }
             } else if (c == '=') {
                 add_token(tokens, token_count, T_SLASH_ASSIGN, "/=");
@@ -223,11 +281,12 @@ void lex(FILE *infile, struct token **tokens, int *token_count)
             add_token(tokens, token_count, T_INTLIT, buffer);
             buffer_index = 0;
         } else {
-            fprintf(stderr, "Error: Invalid character '%c' on line %d\n", c, line);
-            exit(EXIT_FAILURE);
+            lex_error_at(token_line, token_column, "invalid character '%c'", c);
         }
     }
 
+    token_line = current_line;
+    token_column = current_column + 1;
     add_token(tokens, token_count, T_EOF, "EOF");
 }
 
@@ -240,6 +299,8 @@ void add_token(struct token **tokens, int *token_count, TokenType type, const ch
     }
 
     (*tokens)[*token_count].type = type;
+    (*tokens)[*token_count].location.line = token_line;
+    (*tokens)[*token_count].location.column = token_column;
     (*tokens)[*token_count].value = strdup(value);
     (*token_count)++;
 }

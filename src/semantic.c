@@ -29,6 +29,7 @@ static int loop_depth;
 static int error_count;
 static const char *current_function;
 static CType current_return_type;
+static const char *semantic_source_path;
 
 static const char *semantic_type_name(CType type)
 {
@@ -57,11 +58,15 @@ static CType semantic_type_from_name(const char *name)
     return TYPE_INT;
 }
 
-static void semantic_error(const char *format, ...)
+static void semantic_error_at(struct ast_node *node, const char *format, ...)
 {
     va_list args;
 
     fprintf(stderr, "Semantic error");
+    if (node && node->location.line > 0) {
+        fprintf(stderr, " at %s:%d:%d", semantic_source_path,
+            node->location.line, node->location.column);
+    }
     if (current_function) {
         fprintf(stderr, " in function '%s'", current_function);
     }
@@ -120,11 +125,11 @@ static void add_global(struct ast_node *node)
     struct ast_node *param;
 
     if (existing >= 0) {
-        semantic_error("duplicate top-level declaration of '%s'", name);
+        semantic_error_at(node, "duplicate top-level declaration of '%s'", name);
         return;
     }
     if (global_count >= MAX_SYMBOLS) {
-        semantic_error("too many top-level declarations");
+        semantic_error_at(node, "too many top-level declarations");
         return;
     }
 
@@ -135,7 +140,7 @@ static void add_global(struct ast_node *node)
     if (is_function) {
         for (param = node->left; param; param = param->right) {
             if (globals[global_count].parameter_count >= 64) {
-                semantic_error("function '%s' has too many parameters", name);
+                semantic_error_at(node, "function '%s' has too many parameters", name);
                 break;
             }
             globals[global_count].parameter_types[globals[global_count].parameter_count++] =
@@ -145,20 +150,21 @@ static void add_global(struct ast_node *node)
     global_count++;
 }
 
-static void add_local(const char *name, CType type)
+static void add_local(struct ast_node *node, CType type)
 {
+    const char *name = node->value;
     int existing = find_local(name);
 
     if (existing >= 0) {
         if (locals[existing].depth == scope_depth) {
-            semantic_error("duplicate declaration of '%s'", name);
+            semantic_error_at(node, "duplicate declaration of '%s'", name);
         } else {
-            semantic_error("variable shadowing is not supported for '%s'", name);
+            semantic_error_at(node, "variable shadowing is not supported for '%s'", name);
         }
         return;
     }
     if (local_count >= MAX_SYMBOLS) {
-        semantic_error("too many local declarations");
+        semantic_error_at(node, "too many local declarations");
         return;
     }
 
@@ -201,21 +207,21 @@ static void analyze_expression(struct ast_node *node)
             symbol = find_global(node->value);
             if (find_local(node->value) < 0 &&
                 (symbol < 0 || globals[symbol].is_function)) {
-                semantic_error("use of undeclared variable '%s'", node->value);
+                semantic_error_at(node, "use of undeclared variable '%s'", node->value);
             }
             return;
         case AST_CALL:
             symbol = find_global(node->value);
             if (find_local(node->value) >= 0) {
-                semantic_error("called object '%s' is not a function", node->value);
+                semantic_error_at(node, "called object '%s' is not a function", node->value);
             } else if (symbol < 0) {
-                semantic_error("call to undeclared function '%s'", node->value);
+                semantic_error_at(node, "call to undeclared function '%s'", node->value);
             } else if (!globals[symbol].is_function) {
-                semantic_error("called object '%s' is not a function", node->value);
+                semantic_error_at(node, "called object '%s' is not a function", node->value);
             } else {
                 actual_count = count_list(node->left, AST_ARG_LIST);
                 if (actual_count != globals[symbol].parameter_count) {
-                    semantic_error("function '%s' expects %d argument(s), but %d provided",
+                    semantic_error_at(node, "function '%s' expects %d argument(s), but %d provided",
                         node->value, globals[symbol].parameter_count, actual_count);
                 }
             }
@@ -279,7 +285,7 @@ static void analyze_statement(struct ast_node *node)
             analyze_statement(node->right);
             break;
         case AST_DECL:
-            add_local(node->value, node->data_type);
+            add_local(node, node->data_type);
             analyze_expression(node->left);
             break;
         case AST_EXPR_STMT:
@@ -315,12 +321,12 @@ static void analyze_statement(struct ast_node *node)
             break;
         case AST_BREAK:
             if (loop_depth == 0) {
-                semantic_error("'break' statement is not inside a loop");
+                semantic_error_at(node, "'break' statement is not inside a loop");
             }
             break;
         case AST_CONTINUE:
             if (loop_depth == 0) {
-                semantic_error("'continue' statement is not inside a loop");
+                semantic_error_at(node, "'continue' statement is not inside a loop");
             }
             break;
         default:
@@ -404,7 +410,7 @@ static void analyze_top_level(struct ast_node *node)
         analyze_top_level(node->right);
     } else if (node->type == AST_GLOBAL_DECL) {
         if (!is_constant_expression(node->left)) {
-            semantic_error("initializer for global '%s' is not a constant expression", node->value);
+            semantic_error_at(node, "initializer for global '%s' is not a constant expression", node->value);
         }
     } else if (node->type == AST_FUNCTION) {
         current_function = node->value;
@@ -414,7 +420,7 @@ static void analyze_top_level(struct ast_node *node)
 
         for (param = node->left; param; param = param->right) {
             if (param->type == AST_PARAM_LIST) {
-                add_local(param->left->value, param->left->data_type);
+                add_local(param->left, param->left->data_type);
             }
         }
         analyze_block(node->right, 0);
@@ -586,7 +592,7 @@ static void check_statement_types(struct ast_node *node)
             check_statement_types(node->right);
             break;
         case AST_DECL:
-            add_local(node->value, node->data_type);
+            add_local(node, node->data_type);
             if (node->left) {
                 check_expression_type(&node->left);
                 insert_conversion(&node->left, node->data_type);
@@ -646,13 +652,14 @@ static void check_top_level_types(struct ast_node *node)
         local_count = 0;
         scope_depth = 1;
         for (param = node->left; param; param = param->right)
-            add_local(param->left->value, param->left->data_type);
+            add_local(param->left, param->left->data_type);
         if (node->right) check_statement_types(node->right->left);
     }
 }
 
-int semantic_analyze(struct ast_node *ast)
+int semantic_analyze(struct ast_node *ast, const char *source_path)
 {
+    semantic_source_path = source_path;
     global_count = 0;
     local_count = 0;
     scope_depth = 0;
