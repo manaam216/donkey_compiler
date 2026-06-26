@@ -8,6 +8,8 @@ typedef enum {
     T_CLOSEBRACE,
     T_OPENPAREN,
     T_CLOSEPAREN,
+    T_OPENBRACKET,
+    T_CLOSEBRACKET,
     T_SEMICOLON,
     T_COMMA,
     T_QUESTION,
@@ -77,6 +79,7 @@ typedef enum {
     AST_EXPR_STMT,
     AST_PARAM_LIST,
     AST_ARG_LIST,
+    AST_INITIALIZER_LIST,
     AST_CONDITIONAL,
     AST_CONDITIONAL_BRANCHES,
     AST_IF,
@@ -89,6 +92,9 @@ typedef enum {
     AST_CALL,
     AST_CAST,
     AST_SIZEOF,
+    AST_ADDRESS_OF,
+    AST_DEREFERENCE,
+    AST_ARRAY_SUBSCRIPT,
     AST_INTLIT,
     AST_IDENTIFIER,
     AST_NEGATION,
@@ -140,6 +146,8 @@ typedef struct {
 struct ast_node {
     ASTNodeType type;
     CType data_type;
+    int pointer_depth;
+    int array_length;
     SourceLocation location;
     struct ast_node *left;
     struct ast_node *right;

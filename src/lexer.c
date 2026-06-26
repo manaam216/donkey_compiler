@@ -94,6 +94,10 @@ void lex(FILE *infile, const char *source_path, struct token **tokens, int *toke
             add_token(tokens, token_count, T_OPENPAREN, "(");
         } else if (c == ')') {
             add_token(tokens, token_count, T_CLOSEPAREN, ")");
+        } else if (c == '[') {
+            add_token(tokens, token_count, T_OPENBRACKET, "[");
+        } else if (c == ']') {
+            add_token(tokens, token_count, T_CLOSEBRACKET, "]");
         } else if (c == ';') {
             add_token(tokens, token_count, T_SEMICOLON, ";");
         } else if (c == ',') {

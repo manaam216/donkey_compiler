@@ -70,6 +70,80 @@ static CType type_from_name(const char *name)
     return TYPE_INT;
 }
 
+static int parse_pointer_stars(struct token *tokens, int *token_index)
+{
+    int pointer_depth = 0;
+
+    while (tokens[*token_index].type == T_STAR) {
+        pointer_depth++;
+        (*token_index)++;
+    }
+    return pointer_depth;
+}
+
+static int parse_array_length(struct token *tokens, int *token_index)
+{
+    int length;
+
+    if (tokens[*token_index].type != T_OPENBRACKET) {
+        return 0;
+    }
+    (*token_index)++;
+    if (tokens[*token_index].type != T_INTLIT) {
+        parse_error_at(&tokens[*token_index], "expected array length, found '%s'",
+            tokens[*token_index].value);
+    }
+    length = atoi(tokens[*token_index].value);
+    if (length <= 0) {
+        parse_error_at(&tokens[*token_index], "array length must be greater than zero");
+    }
+    (*token_index)++;
+    if (tokens[*token_index].type != T_CLOSEBRACKET) {
+        parse_error_at(&tokens[*token_index], "expected ']', found '%s'",
+            tokens[*token_index].value);
+    }
+    (*token_index)++;
+    return length;
+}
+
+static struct ast_node* parse_initializer(struct token *tokens, int *token_index);
+
+static struct ast_node* parse_initializer_list(struct token *tokens, int *token_index)
+{
+    if (tokens[*token_index].type == T_CLOSEBRACE) {
+        return NULL;
+    }
+
+    struct ast_node *initializer = parse_initializer(tokens, token_index);
+    struct ast_node *rest = NULL;
+    if (tokens[*token_index].type == T_COMMA) {
+        (*token_index)++;
+        rest = parse_initializer_list(tokens, token_index);
+    }
+
+    return create_ast_node(AST_INITIALIZER_LIST, NULL, initializer, rest);
+}
+
+static struct ast_node* parse_initializer(struct token *tokens, int *token_index)
+{
+    SourceLocation location;
+    struct ast_node *list;
+
+    if (tokens[*token_index].type != T_OPENBRACE) {
+        return parse_assignment(tokens, token_index);
+    }
+
+    location = tokens[*token_index].location;
+    (*token_index)++;
+    list = parse_initializer_list(tokens, token_index);
+    if (tokens[*token_index].type != T_CLOSEBRACE) {
+        parse_error_at(&tokens[*token_index], "expected '}', found '%s'",
+            tokens[*token_index].value);
+    }
+    (*token_index)++;
+    return create_ast_node_at(AST_INITIALIZER_LIST, NULL, list, NULL, location);
+}
+
 static int is_type_start(TokenType type)
 {
     return type == T_CHAR || type == T_SHORT || type == T_INT ||
@@ -103,6 +177,7 @@ struct ast_node* parse_external_declaration(struct token *tokens, int *token_ind
         parse_error_at(&tokens[*token_index], "expected top-level declaration, found '%s'",
             tokens[*token_index].value);
     }
+    parse_pointer_stars(tokens, &name_index);
 
     if (tokens[name_index].type != T_IDENTIFIER) {
         parse_error_at(&tokens[name_index], "expected identifier in top-level declaration, found '%s'",
@@ -120,12 +195,14 @@ struct ast_node* parse_function(struct token *tokens, int *token_index)
 {
     const char *type_name = parse_type_name(tokens, token_index);
     struct token *tok;
+    int pointer_depth;
 
     if (!type_name) {
         parse_error_at(&tokens[*token_index], "expected function return type, found '%s'",
             tokens[*token_index].value);
     }
 
+    pointer_depth = parse_pointer_stars(tokens, token_index);
     tok = &tokens[*token_index];
     if (tok->type != T_IDENTIFIER) {
         parse_error_at(tok, "expected identifier, found '%s'", tok->value);
@@ -153,12 +230,14 @@ struct ast_node* parse_function(struct token *tokens, int *token_index)
 
     struct ast_node *function = create_ast_node_at(AST_FUNCTION, func_name, params, body, function_location);
     function->data_type = type_from_name(type_name);
+    function->pointer_depth = pointer_depth;
     return function;
 }
 
 struct ast_node* parse_global_declaration(struct token *tokens, int *token_index)
 {
     const char *type_name = parse_type_name(tokens, token_index);
+    int pointer_depth = parse_pointer_stars(tokens, token_index);
 
     struct token *tok = &tokens[*token_index];
     if (tok->type != T_IDENTIFIER) {
@@ -168,11 +247,12 @@ struct ast_node* parse_global_declaration(struct token *tokens, int *token_index
     char *name = tok->value;
     SourceLocation declaration_location = tok->location;
     (*token_index)++;
+    int array_length = parse_array_length(tokens, token_index);
 
     struct ast_node *initializer = NULL;
     if (tokens[*token_index].type == T_ASSIGN) {
         (*token_index)++;
-        initializer = parse_exp(tokens, token_index);
+        initializer = parse_initializer(tokens, token_index);
     }
 
     if (tokens[*token_index].type != T_SEMICOLON) {
@@ -184,6 +264,8 @@ struct ast_node* parse_global_declaration(struct token *tokens, int *token_index
     struct ast_node *declaration = create_ast_node_at(AST_GLOBAL_DECL, name, initializer, NULL,
         declaration_location);
     declaration->data_type = type_from_name(type_name);
+    declaration->pointer_depth = pointer_depth;
+    declaration->array_length = array_length;
     return declaration;
 }
 
@@ -194,11 +276,13 @@ struct ast_node* parse_param_list(struct token *tokens, int *token_index)
     }
 
     const char *type_name = parse_type_name(tokens, token_index);
+    int pointer_depth;
     if (!type_name) {
         parse_error_at(&tokens[*token_index], "expected parameter type, found '%s'",
             tokens[*token_index].value);
     }
 
+    pointer_depth = parse_pointer_stars(tokens, token_index);
     struct token *tok = &tokens[*token_index];
     if (tok->type != T_IDENTIFIER) {
         parse_error_at(tok, "expected parameter name, found '%s'", tok->value);
@@ -206,6 +290,7 @@ struct ast_node* parse_param_list(struct token *tokens, int *token_index)
 
     struct ast_node *param = create_ast_node_at(AST_IDENTIFIER, tok->value, NULL, NULL, tok->location);
     param->data_type = type_from_name(type_name);
+    param->pointer_depth = pointer_depth;
     (*token_index)++;
 
     struct ast_node *rest = NULL;
@@ -325,6 +410,7 @@ struct ast_node* parse_statement(struct token *tokens, int *token_index)
 struct ast_node* parse_declaration(struct token *tokens, int *token_index)
 {
     const char *type_name = parse_type_name(tokens, token_index);
+    int pointer_depth = parse_pointer_stars(tokens, token_index);
 
     struct token *tok = &tokens[*token_index];
     if (tok->type != T_IDENTIFIER) {
@@ -334,11 +420,12 @@ struct ast_node* parse_declaration(struct token *tokens, int *token_index)
     char *name = tok->value;
     SourceLocation declaration_location = tok->location;
     (*token_index)++;
+    int array_length = parse_array_length(tokens, token_index);
 
     struct ast_node *initializer = NULL;
     if (tokens[*token_index].type == T_ASSIGN) {
         (*token_index)++;
-        initializer = parse_exp(tokens, token_index);
+        initializer = parse_initializer(tokens, token_index);
     }
 
     tok = &tokens[*token_index];
@@ -350,6 +437,8 @@ struct ast_node* parse_declaration(struct token *tokens, int *token_index)
     struct ast_node *declaration = create_ast_node_at(AST_DECL, name, initializer, NULL,
         declaration_location);
     declaration->data_type = type_from_name(type_name);
+    declaration->pointer_depth = pointer_depth;
+    declaration->array_length = array_length;
     return declaration;
 }
 
@@ -526,6 +615,16 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
         (*token_index)++;
         return create_ast_node_at(AST_BITWISE_COMPLEMENT, NULL, parse_factor(tokens, token_index), NULL,
             operator_location);
+    } else if (tok->type == T_AMPERSAND) {
+        SourceLocation operator_location = tok->location;
+        (*token_index)++;
+        return create_ast_node_at(AST_ADDRESS_OF, NULL, parse_factor(tokens, token_index), NULL,
+            operator_location);
+    } else if (tok->type == T_STAR) {
+        SourceLocation operator_location = tok->location;
+        (*token_index)++;
+        return create_ast_node_at(AST_DEREFERENCE, NULL, parse_factor(tokens, token_index), NULL,
+            operator_location);
     }
 
     if (tok->type == T_INTLIT) {
@@ -559,6 +658,17 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
 
         struct ast_node *id = create_ast_node_at(AST_IDENTIFIER, name, NULL, NULL,
             identifier_location);
+        while (tokens[*token_index].type == T_OPENBRACKET) {
+            SourceLocation bracket_location = tokens[*token_index].location;
+            (*token_index)++;
+            struct ast_node *index = parse_exp(tokens, token_index);
+            if (tokens[*token_index].type != T_CLOSEBRACKET) {
+                parse_error_at(&tokens[*token_index], "expected ']', found '%s'",
+                    tokens[*token_index].value);
+            }
+            (*token_index)++;
+            id = create_ast_node_at(AST_ARRAY_SUBSCRIPT, NULL, id, index, bracket_location);
+        }
         if (tokens[*token_index].type == T_PLUS_PLUS) {
             SourceLocation operator_location = tokens[*token_index].location;
             (*token_index)++;
@@ -665,7 +775,9 @@ struct ast_node* parse_assignment(struct token *tokens, int *token_index)
         op == T_STAR_ASSIGN || op == T_SLASH_ASSIGN || op == T_PERCENT_ASSIGN ||
         op == T_AMPERSAND_ASSIGN || op == T_PIPE_ASSIGN || op == T_CARET_ASSIGN ||
         op == T_SHIFT_LEFT_ASSIGN || op == T_SHIFT_RIGHT_ASSIGN) {
-        if (left->type != AST_IDENTIFIER) {
+        if (left->type != AST_IDENTIFIER &&
+            left->type != AST_DEREFERENCE &&
+            left->type != AST_ARRAY_SUBSCRIPT) {
             parse_error_at(&tokens[*token_index], "left side of assignment must be an identifier");
         }
 
@@ -675,6 +787,10 @@ struct ast_node* parse_assignment(struct token *tokens, int *token_index)
 
         if (op == T_ASSIGN) {
             return create_ast_node_at(AST_ASSIGN, NULL, left, right, operator_location);
+        }
+        if (left->type != AST_IDENTIFIER) {
+            parse_error_at(&tokens[*token_index],
+                "compound assignment target must be an identifier");
         }
 
         ASTNodeType binop = AST_ADD;
@@ -901,6 +1017,8 @@ struct ast_node* create_ast_node_at(ASTNodeType type, char *value, struct ast_no
 
     node->type = type;
     node->data_type = TYPE_INVALID;
+    node->pointer_depth = 0;
+    node->array_length = 0;
     node->location = location;
     node->value = value ? strdup(value) : NULL;
     node->left = left;

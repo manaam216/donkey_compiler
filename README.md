@@ -148,6 +148,14 @@ Supported expression features:
 - Local declarations: `int x;` and `int x = expression;`
 - Integer declarations and parameters using signed/unsigned `char`, `short`,
   `int`, and `long`
+- Single-level pointer declarations and parameters such as `int *p`
+- Local fixed-size integer arrays such as `int values[4]`
+- Global fixed-size integer arrays such as `int table[4]`
+- Brace initializers for arrays, with omitted elements zero-filled:
+  `int values[3] = {1, 2};`
+- Address-of, dereference, and indexing expressions: `&x`, `*p`, and `a[i]`
+- Array-to-pointer decay in expressions, plus scaled pointer arithmetic:
+  `p + 1`, `p - 1`, `p++`, and `p--`
 - Multiple statements inside a function body
 - Multiple integer-returning functions per input file
 - Function parameters: `int helper(int x, int y)`
@@ -188,6 +196,9 @@ Assignments, arguments, and return values are converted to their destination
 types; unsigned division, comparisons, and right shifts use unsigned machine
 operations. All current integer types occupy four-byte storage slots, while
 `char` and `short` values are narrowed and sign- or zero-extended as required.
+Pointer assignments are type checked, and array indexing currently uses
+four-byte elements. Pointer arithmetic is scaled by four-byte elements for the
+current integer-only pointer model.
 
 Local variables are stored in a simple stack frame. Assignment leaves the
 assigned value in `%eax`, so it can be used inside larger expressions.
@@ -221,5 +232,7 @@ This removes the `build/` directory.
 - Nested blocks have lexical visibility, but variable shadowing is rejected
   until the code generator assigns symbols unique storage identities
 - Global initializers must be constant expressions
+- Arrays cannot be assigned as whole values
+- Pointer subtraction between two pointers is not supported yet
 - Assembly output is for learning and demonstration, not a complete production
   toolchain

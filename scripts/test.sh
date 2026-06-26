@@ -24,6 +24,9 @@ mkdir -p "$build_dir"
 "$compiler" examples/comments.c "$build_dir/comments.asm"
 "$compiler" examples/globals.c "$build_dir/globals.asm"
 "$compiler" examples/types.c "$build_dir/types.asm"
+"$compiler" examples/pointers_arrays.c "$build_dir/pointers_arrays.asm"
+"$compiler" examples/pointer_arithmetic.c "$build_dir/pointer_arithmetic.asm"
+"$compiler" examples/global_arrays.c "$build_dir/global_arrays.asm"
 "$compiler" tests/semantic/valid_forward_call.c "$build_dir/valid_forward_call.asm"
 
 expect_semantic_error() {
@@ -66,6 +69,10 @@ expect_semantic_error tests/semantic/duplicate_declaration.c "duplicate declarat
 expect_semantic_error tests/semantic/break_outside_loop.c "'break' statement is not inside a loop"
 expect_semantic_error tests/semantic/shadowing.c "variable shadowing is not supported for 'value'"
 expect_semantic_error tests/semantic/call_shadowed_function.c "called object 'helper' is not a function"
+expect_semantic_error tests/semantic/invalid_pointer_assignment.c "cannot assign int to int*"
+expect_semantic_error tests/semantic/invalid_dereference.c "cannot dereference non-pointer expression"
+expect_semantic_error tests/semantic/invalid_pointer_addition.c "invalid operands to pointer arithmetic"
+expect_semantic_error tests/semantic/too_many_array_initializers.c "too many initializers for array 'values'"
 
 awk '
     NR == FNR {
@@ -101,6 +108,9 @@ awk '
 "$cc" -x assembler "$build_dir/comments.asm" -o "$build_dir/comments.exe"
 "$cc" -x assembler "$build_dir/globals.asm" -o "$build_dir/globals.exe"
 "$cc" -x assembler "$build_dir/types.asm" -o "$build_dir/types.exe"
+"$cc" -x assembler "$build_dir/pointers_arrays.asm" -o "$build_dir/pointers_arrays.exe"
+"$cc" -x assembler "$build_dir/pointer_arithmetic.asm" -o "$build_dir/pointer_arithmetic.exe"
+"$cc" -x assembler "$build_dir/global_arrays.asm" -o "$build_dir/global_arrays.exe"
 "$cc" -x assembler "$build_dir/valid_forward_call.asm" -o "$build_dir/valid_forward_call.exe"
 
 run_and_expect() {
@@ -131,6 +141,9 @@ run_and_expect "$build_dir/casts.exe" 29
 run_and_expect "$build_dir/comments.exe" 12
 run_and_expect "$build_dir/globals.exe" 21
 run_and_expect "$build_dir/types.exe" 162
+run_and_expect "$build_dir/pointers_arrays.exe" 19
+run_and_expect "$build_dir/pointer_arithmetic.exe" 14
+run_and_expect "$build_dir/global_arrays.exe" 20
 run_and_expect "$build_dir/valid_forward_call.exe" 5
 
 echo "All compiler checks passed."
