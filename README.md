@@ -176,6 +176,13 @@ wrong number of arguments, non-constant global initializers, and `break` or
 function bodies are checked, so calls to functions defined later in the file
 are valid.
 
+Lexer, parser, and semantic diagnostics include the source path, line, and
+column of the offending token:
+
+```text
+Semantic error at examples/bad.c:3:12 in function 'main': use of undeclared variable 'missing'
+```
+
 Expressions use C-style integer promotions and usual arithmetic conversions.
 Assignments, arguments, and return values are converted to their destination
 types; unsigned division, comparisons, and right shifts use unsigned machine

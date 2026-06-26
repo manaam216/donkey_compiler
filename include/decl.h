@@ -1,14 +1,15 @@
 #ifndef DONKEY_DECL_H
 #define DONKEY_DECL_H
 
-void lex(FILE *infile, struct token **tokens, int *token_count);
+void lex(FILE *infile, const char *source_path, struct token **tokens, int *token_count);
 void add_token(struct token **tokens, int *token_count, TokenType type, const char *value);
 void free_tokens(struct token *tokens, int token_count);
 
 struct ast_node* create_ast_node(ASTNodeType type, char *value, struct ast_node *left, struct ast_node *right);
+struct ast_node* create_ast_node_at(ASTNodeType type, char *value, struct ast_node *left, struct ast_node *right, SourceLocation location);
 void free_ast_node(struct ast_node *node);
 
-struct ast_node* parse_program(struct token *tokens, int *token_index);
+struct ast_node* parse_program(struct token *tokens, int *token_index, const char *source_path);
 struct ast_node* parse_function_list(struct token *tokens, int *token_index);
 struct ast_node* parse_external_declaration(struct token *tokens, int *token_index);
 struct ast_node* parse_function(struct token *tokens, int *token_index);
@@ -40,7 +41,7 @@ struct ast_node* parse_term(struct token *tokens, int *token_index);
 struct ast_node* parse_factor(struct token *tokens, int *token_index);
 struct ast_node* parse_arg_list(struct token *tokens, int *token_index);
 
-int semantic_analyze(struct ast_node *ast);
+int semantic_analyze(struct ast_node *ast, const char *source_path);
 
 char* generate(struct ast_node *ast);
 void generate_function(struct ast_node *node, FILE *output);

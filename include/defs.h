@@ -132,9 +132,15 @@ typedef enum {
     TYPE_ULONG
 } CType;
 
+typedef struct {
+    int line;
+    int column;
+} SourceLocation;
+
 struct ast_node {
     ASTNodeType type;
     CType data_type;
+    SourceLocation location;
     struct ast_node *left;
     struct ast_node *right;
     char *value;
@@ -142,6 +148,7 @@ struct ast_node {
 
 struct token {
     TokenType type;
+    SourceLocation location;
     char *value;
 };
 

@@ -42,7 +42,25 @@ expect_semantic_error() {
     fi
 }
 
-expect_semantic_error tests/semantic/undeclared_variable.c "use of undeclared variable 'missing'"
+expect_compile_error() {
+    input="$1"
+    expected="$2"
+    diagnostics="$build_dir/compile-errors.txt"
+
+    if "$compiler" "$input" "$build_dir/invalid.asm" 2>"$diagnostics"; then
+        echo "Expected compiler to reject $input" >&2
+        exit 1
+    fi
+    if ! grep -F "$expected" "$diagnostics" >/dev/null; then
+        echo "Expected diagnostic '$expected' for $input" >&2
+        cat "$diagnostics" >&2
+        exit 1
+    fi
+}
+
+expect_compile_error tests/syntax/missing_semicolon.c "Parse error at tests/syntax/missing_semicolon.c:4:1: expected ';', found '}'"
+expect_compile_error tests/syntax/invalid_character.c "Lex error at tests/syntax/invalid_character.c:3:12: invalid character '@'"
+expect_semantic_error tests/semantic/undeclared_variable.c "Semantic error at tests/semantic/undeclared_variable.c:3:12 in function 'main': use of undeclared variable 'missing'"
 expect_semantic_error tests/semantic/wrong_argument_count.c "expects 2 argument(s), but 1 provided"
 expect_semantic_error tests/semantic/duplicate_declaration.c "duplicate declaration of 'value'"
 expect_semantic_error tests/semantic/break_outside_loop.c "'break' statement is not inside a loop"

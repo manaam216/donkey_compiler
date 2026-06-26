@@ -21,12 +21,12 @@ int main(int argc, char *argv[])
     struct token *tokens = NULL;
     int token_count = 0;
 
-    lex(infile, &tokens, &token_count);
+    lex(infile, argv[1], &tokens, &token_count);
 
     int token_index = 0;
-    struct ast_node *ast = parse_program(tokens, &token_index);
+    struct ast_node *ast = parse_program(tokens, &token_index, argv[1]);
 
-    if (!semantic_analyze(ast)) {
+    if (!semantic_analyze(ast, argv[1])) {
         free_ast_node(ast);
         free_tokens(tokens, token_count);
         fclose(infile);
