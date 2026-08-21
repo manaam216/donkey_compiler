@@ -31,6 +31,13 @@ integer-returning functions.
 |   |-- globals.c
 |   |-- missing_ops.c
 |   `-- unary.c
+|-- tests/            Test inputs and expectations
+|   |-- harness.c     Prints a compiled program's result (see Test)
+|   |-- golden/       Reference assembly for every example
+|   |-- expected/     Reference program output for every example
+|   |-- syntax/       Inputs that must fail to parse
+|   |-- semantic/     Inputs that must fail semantic analysis
+|   `-- limits/       Inputs that must hit a compiler capacity limit
 |-- build/            Generated binaries and assembly output
 `-- Makefile
 ```
@@ -67,12 +74,44 @@ Run the project checks:
 make test
 ```
 
-The test script rebuilds the compiler, compiles every example in `examples/`,
-assembles the generated files, runs the produced executables, and checks their
-exit codes.
+The test script rebuilds the compiler and, for every example in `examples/`:
 
-CI runs the same `make test` flow on GitHub Actions using Windows plus MSYS2
-MINGW32, which matches the current `_main` assembly symbol convention.
+1. Compiles it to assembly and diffs that against the golden copy in
+   `tests/golden/`.
+2. Renames the example's `_main` symbol to `_donkey_main`, links it against
+   `tests/harness.c`, runs it, and diffs the printed result against
+   `tests/expected/`.
+
+It then checks that each program in `tests/` is rejected with the expected
+diagnostic.
+
+Results are compared as **printed values rather than process exit codes**.
+Exit codes are truncated to 8 unsigned bits, so they silently accept wrong
+answers: a function returning `100000` exits `160`, and one returning `-42`
+exits `214`. `examples/wide_values.c` covers that range explicitly. Donkey
+itself cannot call `printf` — it has no preprocessor, and semantic analysis
+rejects undeclared functions — hence the separate harness.
+
+After an intentional codegen or diagnostic change, regenerate the golden files
+and review the diff before committing:
+
+```sh
+UPDATE_GOLDEN=1 make test
+```
+
+To check compilation, golden assembly, and diagnostics without assembling or
+running anything (useful on platforms that cannot link the MinGW-style `_main`
+symbols this backend emits):
+
+```sh
+SKIP_RUN=1 make test
+```
+
+CI runs three jobs on GitHub Actions: the full flow on Windows plus MSYS2
+MINGW32, which matches the current `_main` assembly symbol convention; a
+compile-only pass on Linux that catches portability bugs in the compiler's own
+source; and an ASan/UBSan build. Note that MinGW GCC cannot build with
+sanitizers, so that job is Linux-only.
 
 ## Run
 
@@ -156,6 +195,13 @@ Supported expression features:
 - Address-of, dereference, and indexing expressions: `&x`, `*p`, and `a[i]`
 - Array-to-pointer decay in expressions, plus scaled pointer arithmetic:
   `p + 1`, `p - 1`, `p++`, and `p--`
+- Pointer subtraction for compatible pointer types
+- Array parameters such as `int values[4]`, treated as pointer parameters
+- Character literals including common escapes: `'A'`, `'\n'`, `'\0'`,
+  `'\''`, and `'\\'`
+- String literals with static storage, usable as `char *`
+- Limited structs with integer/pointer fields, stack/global variables, field
+  read/write via `value.field`
 - Multiple statements inside a function body
 - Multiple integer-returning functions per input file
 - Function parameters: `int helper(int x, int y)`
@@ -205,12 +251,18 @@ assigned value in `%eax`, so it can be used inside larger expressions.
 
 ## Reference Output
 
-`examples/sample.asm` is the checked-in reference output for
-`examples/sample.c`. To regenerate it:
+`tests/golden/` holds the checked-in reference assembly for every example, and
+`tests/expected/` the reference program output. Regenerate both with:
 
 ```sh
-./build/donkey examples/sample.c examples/sample.asm
+UPDATE_GOLDEN=1 make test
 ```
+
+Review the resulting diff before committing — it is the only thing separating
+an intentional codegen change from a regression.
+
+(`examples/sample.asm` predates `tests/golden/` and is no longer used by the
+test suite.)
 
 To assemble the generated file with GCC, force assembler mode because `.asm`
 is not always detected automatically:
@@ -233,6 +285,9 @@ This removes the `build/` directory.
   until the code generator assigns symbols unique storage identities
 - Global initializers must be constant expressions
 - Arrays cannot be assigned as whole values
-- Pointer subtraction between two pointers is not supported yet
+- Struct support does not include nested structs, struct arrays, or struct
+  parameters yet
+- String indexing still uses the current four-byte element model; cast loaded
+  values to `char` when a byte value is intended
 - Assembly output is for learning and demonstration, not a complete production
   toolchain

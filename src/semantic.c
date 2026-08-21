@@ -12,6 +12,7 @@ struct global_symbol {
     CType type;
     int pointer_depth;
     int array_length;
+    const char *struct_name;
     int parameter_count;
     CType parameter_types[64];
     int parameter_pointer_depths[64];
@@ -22,13 +23,29 @@ struct local_symbol {
     CType type;
     int pointer_depth;
     int array_length;
+    const char *struct_name;
     int depth;
+};
+
+struct struct_field {
+    const char *name;
+    CType type;
+    int pointer_depth;
+    int offset;
+};
+
+struct struct_symbol {
+    const char *name;
+    int field_count;
+    struct struct_field fields[64];
 };
 
 static struct global_symbol globals[MAX_SYMBOLS];
 static struct local_symbol locals[MAX_SYMBOLS];
+static struct struct_symbol structs[MAX_SYMBOLS];
 static int global_count;
 static int local_count;
+static int struct_count;
 static int scope_depth;
 static int loop_depth;
 static int error_count;
@@ -36,6 +53,8 @@ static const char *current_function;
 static CType current_return_type;
 static int current_return_pointer_depth;
 static const char *semantic_source_path;
+
+static void semantic_error_at(struct ast_node *node, const char *format, ...);
 
 static const char *semantic_type_name(CType type)
 {
@@ -82,6 +101,67 @@ static int semantic_effective_pointer_depth(struct ast_node *node)
         return 0;
     }
     return node->pointer_depth + (node->array_length > 0 ? 1 : 0);
+}
+
+static int find_struct(const char *name)
+{
+    int i;
+
+    if (!name) return -1;
+    for (i = 0; i < struct_count; i++) {
+        if (strcmp(structs[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int find_struct_field(int struct_index, const char *name)
+{
+    int i;
+
+    if (struct_index < 0) return -1;
+    for (i = 0; i < structs[struct_index].field_count; i++) {
+        if (strcmp(structs[struct_index].fields[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void add_struct(struct ast_node *node)
+{
+    struct ast_node *field;
+
+    if (find_struct(node->value) >= 0) {
+        semantic_error_at(node, "duplicate struct definition '%s'", node->value);
+        return;
+    }
+    if (struct_count >= MAX_SYMBOLS) {
+        semantic_error_at(node, "too many struct definitions");
+        return;
+    }
+    structs[struct_count].name = node->value;
+    structs[struct_count].field_count = 0;
+    for (field = node->left; field; field = field->right) {
+        struct ast_node *decl = field->left;
+        int existing = find_struct_field(struct_count, decl->value);
+        int index = structs[struct_count].field_count;
+        if (existing >= 0) {
+            semantic_error_at(decl, "duplicate field '%s'", decl->value);
+            continue;
+        }
+        if (index >= 64) {
+            semantic_error_at(decl, "too many fields in struct '%s'", node->value);
+            break;
+        }
+        structs[struct_count].fields[index].name = decl->value;
+        structs[struct_count].fields[index].type = decl->data_type;
+        structs[struct_count].fields[index].pointer_depth = decl->pointer_depth;
+        structs[struct_count].fields[index].offset = index * 4;
+        structs[struct_count].field_count++;
+    }
+    struct_count++;
 }
 
 static CType semantic_type_from_name(const char *name)
@@ -182,12 +262,17 @@ static void add_global(struct ast_node *node)
         semantic_error_at(node, "too many top-level declarations");
         return;
     }
+    if (node->struct_name && find_struct(node->struct_name) < 0) {
+        semantic_error_at(node, "unknown struct type '%s'", node->struct_name);
+        return;
+    }
 
     globals[global_count].name = name;
     globals[global_count].is_function = is_function;
     globals[global_count].type = node->data_type;
     globals[global_count].pointer_depth = node->pointer_depth;
     globals[global_count].array_length = node->array_length;
+    globals[global_count].struct_name = node->struct_name;
     globals[global_count].parameter_count = 0;
     if (is_function) {
         for (param = node->left; param; param = param->right) {
@@ -221,11 +306,16 @@ static void add_local(struct ast_node *node, CType type)
         semantic_error_at(node, "too many local declarations");
         return;
     }
+    if (node->struct_name && find_struct(node->struct_name) < 0) {
+        semantic_error_at(node, "unknown struct type '%s'", node->struct_name);
+        return;
+    }
 
     locals[local_count].name = name;
     locals[local_count].type = type;
     locals[local_count].pointer_depth = node->pointer_depth;
     locals[local_count].array_length = node->array_length;
+    locals[local_count].struct_name = node->struct_name;
     locals[local_count].depth = scope_depth;
     local_count++;
 }
@@ -408,6 +498,8 @@ static void collect_top_level(struct ast_node *node)
         collect_top_level(node->right);
     } else if (node->type == AST_FUNCTION) {
         add_global(node);
+    } else if (node->type == AST_STRUCT_DEF) {
+        add_struct(node);
     } else if (node->type == AST_GLOBAL_DECL) {
         add_global(node);
     }
@@ -480,6 +572,8 @@ static void analyze_top_level(struct ast_node *node)
         if (!is_constant_expression(node->left)) {
             semantic_error_at(node, "initializer for global '%s' is not a constant expression", node->value);
         }
+    } else if (node->type == AST_STRUCT_DEF) {
+        return;
     } else if (node->type == AST_FUNCTION) {
         current_function = node->value;
         local_count = 0;
@@ -561,6 +655,17 @@ static CType check_binary_type(struct ast_node *node)
         }
         if (node->type == AST_SUB &&
             left_pointer_depth > 0 &&
+            right_pointer_depth > 0) {
+            if (left != right || left_pointer_depth != right_pointer_depth) {
+                semantic_error_at(node, "cannot subtract incompatible pointer types");
+                return node->data_type = TYPE_INVALID;
+            }
+            node->pointer_depth = 0;
+            node->array_length = 0;
+            return node->data_type = TYPE_INT;
+        }
+        if (node->type == AST_SUB &&
+            left_pointer_depth > 0 &&
             semantic_is_integer(right, right_pointer_depth, node->right->array_length)) {
             node->pointer_depth = left_pointer_depth;
             node->array_length = 0;
@@ -610,6 +715,9 @@ static CType check_expression_type(struct ast_node **slot)
     switch (node->type) {
         case AST_INTLIT:
             return node->data_type = TYPE_INT;
+        case AST_STRINGLIT:
+            node->pointer_depth = 1;
+            return node->data_type = TYPE_CHAR;
         case AST_SIZEOF:
             return node->data_type = TYPE_UINT;
         case AST_INITIALIZER_LIST:
@@ -622,14 +730,36 @@ static CType check_expression_type(struct ast_node **slot)
                 node->data_type = locals[local].type;
                 node->pointer_depth = locals[local].pointer_depth;
                 node->array_length = locals[local].array_length;
+                node->struct_name = locals[local].struct_name ? strdup(locals[local].struct_name) : NULL;
                 return node->data_type;
             }
             if (global >= 0 && !globals[global].is_function) {
                 node->pointer_depth = globals[global].pointer_depth;
                 node->array_length = globals[global].array_length;
+                node->struct_name = globals[global].struct_name ? strdup(globals[global].struct_name) : NULL;
                 return node->data_type = globals[global].type;
             }
             return node->data_type = TYPE_INVALID;
+        case AST_FIELD_ACCESS: {
+            int struct_index;
+            int field_index;
+            check_expression_type(&node->left);
+            if (!node->left->struct_name || node->left->pointer_depth > 0) {
+                semantic_error_at(node, "field access requires a struct value");
+                return node->data_type = TYPE_INVALID;
+            }
+            struct_index = find_struct(node->left->struct_name);
+            field_index = find_struct_field(struct_index, node->value);
+            if (field_index < 0) {
+                semantic_error_at(node, "struct '%s' has no field '%s'",
+                    node->left->struct_name, node->value);
+                return node->data_type = TYPE_INVALID;
+            }
+            node->data_type = structs[struct_index].fields[field_index].type;
+            node->pointer_depth = structs[struct_index].fields[field_index].pointer_depth;
+            node->array_length = 0;
+            return node->data_type;
+        }
         case AST_CALL:
             global = find_global(node->value);
             argument_index = 0;
@@ -662,6 +792,7 @@ static CType check_expression_type(struct ast_node **slot)
             check_expression_type(&node->left);
             if (node->left->type != AST_IDENTIFIER &&
                 node->left->type != AST_DEREFERENCE &&
+                node->left->type != AST_FIELD_ACCESS &&
                 node->left->type != AST_ARRAY_SUBSCRIPT) {
                 semantic_error_at(node, "operand of '&' must be an lvalue");
                 return node->data_type = TYPE_INVALID;
@@ -893,6 +1024,8 @@ static void check_top_level_types(struct ast_node *node)
                 insert_conversion(&node->left, node->data_type);
             }
         }
+    } else if (node->type == AST_STRUCT_DEF) {
+        return;
     } else if (node->type == AST_FUNCTION) {
         current_return_type = node->data_type;
         current_return_pointer_depth = node->pointer_depth;
@@ -909,6 +1042,7 @@ int semantic_analyze(struct ast_node *ast, const char *source_path)
     semantic_source_path = source_path;
     global_count = 0;
     local_count = 0;
+    struct_count = 0;
     scope_depth = 0;
     loop_depth = 0;
     error_count = 0;

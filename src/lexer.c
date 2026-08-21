@@ -106,6 +106,55 @@ void lex(FILE *infile, const char *source_path, struct token **tokens, int *toke
             add_token(tokens, token_count, T_QUESTION, "?");
         } else if (c == ':') {
             add_token(tokens, token_count, T_COLON, ":");
+        } else if (c == '.') {
+            add_token(tokens, token_count, T_DOT, ".");
+        } else if (c == '\'') {
+            int value;
+            c = fgetc(infile);
+            if (c == EOF || c == '\n') {
+                lex_error_at(token_line, token_column, "unterminated character literal");
+            }
+            if (c == '\\') {
+                c = fgetc(infile);
+                if (c == 'n') value = '\n';
+                else if (c == '0') value = '\0';
+                else if (c == '\'') value = '\'';
+                else if (c == '\\') value = '\\';
+                else lex_error_at(token_line, token_column, "unsupported character escape '\\%c'", c);
+            } else {
+                value = c;
+            }
+            c = fgetc(infile);
+            if (c != '\'') {
+                lex_error_at(token_line, token_column, "unterminated character literal");
+            }
+            snprintf(buffer, sizeof(buffer), "%d", value);
+            add_token(tokens, token_count, T_CHARLIT, buffer);
+        } else if (c == '"') {
+            buffer_index = 0;
+            while ((c = fgetc(infile)) != EOF && c != '"') {
+                if (c == '\n') {
+                    lex_error_at(token_line, token_column, "unterminated string literal");
+                }
+                if (c == '\\') {
+                    c = fgetc(infile);
+                    if (c == 'n') c = '\n';
+                    else if (c == '0') c = '\0';
+                    else if (c == '"') c = '"';
+                    else if (c == '\\') c = '\\';
+                    else lex_error_at(token_line, token_column, "unsupported string escape '\\%c'", c);
+                }
+                if (buffer_index >= (int)sizeof(buffer) - 1) {
+                    lex_error_at(token_line, token_column, "string literal is too long");
+                }
+                buffer[buffer_index++] = c;
+            }
+            if (c != '"') {
+                lex_error_at(token_line, token_column, "unterminated string literal");
+            }
+            buffer[buffer_index] = '\0';
+            add_token(tokens, token_count, T_STRINGLIT, buffer);
+            buffer_index = 0;
         } else if (c == '-') {
             if ((c = fgetc(infile)) == '-') {
                 add_token(tokens, token_count, T_MINUS_MINUS, "--");
@@ -268,6 +317,8 @@ void lex(FILE *infile, const char *source_path, struct token **tokens, int *toke
                 add_token(tokens, token_count, T_BREAK, buffer);
             } else if (strcmp(buffer, "continue") == 0) {
                 add_token(tokens, token_count, T_CONTINUE, buffer);
+            } else if (strcmp(buffer, "struct") == 0) {
+                add_token(tokens, token_count, T_STRUCT, buffer);
             } else if (strcmp(buffer, "sizeof") == 0) {
                 add_token(tokens, token_count, T_SIZEOF, buffer);
             } else {

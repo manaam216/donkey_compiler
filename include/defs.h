@@ -14,6 +14,7 @@ typedef enum {
     T_COMMA,
     T_QUESTION,
     T_COLON,
+    T_DOT,
     T_CHAR,
     T_SHORT,
     T_INT,
@@ -27,9 +28,12 @@ typedef enum {
     T_FOR,
     T_BREAK,
     T_CONTINUE,
+    T_STRUCT,
     T_SIZEOF,
     T_IDENTIFIER,
     T_INTLIT,
+    T_CHARLIT,
+    T_STRINGLIT,
     T_BITWISE_COMPLEMENT,
     T_LOGICAL_NEGATION,
     T_PLUS,
@@ -72,6 +76,8 @@ typedef enum {
     AST_FUNCTION_LIST,
     AST_FUNCTION,
     AST_GLOBAL_DECL,
+    AST_STRUCT_DEF,
+    AST_FIELD_LIST,
     AST_BLOCK,
     AST_STATEMENT_LIST,
     AST_RETURN,
@@ -95,7 +101,9 @@ typedef enum {
     AST_ADDRESS_OF,
     AST_DEREFERENCE,
     AST_ARRAY_SUBSCRIPT,
+    AST_FIELD_ACCESS,
     AST_INTLIT,
+    AST_STRINGLIT,
     AST_IDENTIFIER,
     AST_NEGATION,
     AST_BITWISE_COMPLEMENT,
@@ -148,6 +156,8 @@ struct ast_node {
     CType data_type;
     int pointer_depth;
     int array_length;
+    int string_label;
+    char *struct_name;
     SourceLocation location;
     struct ast_node *left;
     struct ast_node *right;
