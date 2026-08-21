@@ -5,8 +5,8 @@ on:
   pull_request:
 
 jobs:
-  build-and-test:
-    name: Build and test
+  windows:
+    name: Windows i686 (full)
     runs-on: windows-latest
 
     defaults:
@@ -25,10 +25,50 @@ jobs:
           install: >-
             make
             gawk
+            diffutils
             mingw-w64-i686-gcc
 
       - name: Build
         run: make
 
+      # The only platform that can currently assemble, link, and run the
+      # generated code: codegen emits MinGW-style `_main` symbols.
       - name: Test
+        run: make test
+
+  linux:
+    name: Linux x86-64 (compile only)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: make
+
+      # Cannot link yet -- generated assembly uses the MinGW `_main` symbol
+      # convention. Until the x86-64 System V backend lands, this job still
+      # catches portability bugs in the compiler's own C code and verifies
+      # golden assembly plus every diagnostic.
+      - name: Test (compile only)
+        run: SKIP_RUN=1 make test
+
+  sanitizers:
+    name: ASan + UBSan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build and test with sanitizers
+        env:
+          CFLAGS: -Wall -Wextra -g -fsanitize=address,undefined -fno-omit-frame-pointer
+          ASAN_OPTIONS: detect_leaks=0
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          SKIP_RUN: "1"
+        # Leak detection is off for now: globals[], structs[], and strings[] in
+        # codegen.c leak by design, and every exit() path abandons the AST.
+        # Turn it on once the compiler-context refactor gives those owners.
         run: make test

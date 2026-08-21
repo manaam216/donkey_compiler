@@ -9,14 +9,30 @@ static struct {
     char *name;
     int offset;
     int array_length;
+    char *struct_name;
 } symbols[256];
 static struct {
     char *name;
     int array_length;
     int values[256];
 } globals[256];
+struct codegen_field {
+    char *name;
+    int offset;
+};
+static struct {
+    char *name;
+    int field_count;
+    struct codegen_field fields[64];
+} structs[256];
+static struct {
+    char *value;
+    int label;
+} strings[256];
 static int symbol_count = 0;
 static int global_count = 0;
+static int struct_count = 0;
+static int string_count = 0;
 static int local_stack_count = 0;
 static int label_count = 0;
 static int current_function_end_label = 0;
@@ -76,7 +92,37 @@ static void add_symbol(const char *name, int offset)
     symbols[symbol_count].name = strdup(name);
     symbols[symbol_count].offset = offset;
     symbols[symbol_count].array_length = 0;
+    symbols[symbol_count].struct_name = NULL;
     symbol_count++;
+}
+
+static int find_struct(const char *name)
+{
+    for (int i = 0; i < struct_count; i++) {
+        if (strcmp(structs[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int struct_size(const char *name)
+{
+    int index = find_struct(name);
+    if (index < 0) return 4;
+    return structs[index].field_count * 4;
+}
+
+static int struct_field_offset(const char *struct_name, const char *field_name)
+{
+    int index = find_struct(struct_name);
+    if (index < 0) return 0;
+    for (int i = 0; i < structs[index].field_count; i++) {
+        if (strcmp(structs[index].fields[i].name, field_name) == 0) {
+            return structs[index].fields[i].offset;
+        }
+    }
+    return 0;
 }
 
 static int eval_const_exp(struct ast_node *node);
@@ -111,6 +157,12 @@ static void add_global_node(struct ast_node *node)
         exit(1);
     }
 
+    if (node->array_length > 256) {
+        fprintf(stderr, "Global array '%s' exceeds the supported length of 256\n",
+            node->value);
+        exit(1);
+    }
+
     globals[global_count].name = strdup(node->value);
     globals[global_count].array_length = node->array_length;
     for (i = 0; i < 256; i++) {
@@ -136,9 +188,14 @@ static void add_local_node(struct ast_node *node)
 {
     int slots = node->array_length > 0 ? node->array_length : 1;
 
+    if (node->struct_name && node->pointer_depth == 0 && node->array_length == 0) {
+        slots = struct_size(node->struct_name) / 4;
+    }
+
     local_stack_count += slots;
     add_symbol(node->value, -4 * local_stack_count);
     symbols[symbol_count - 1].array_length = node->array_length;
+    symbols[symbol_count - 1].struct_name = node->struct_name ? strdup(node->struct_name) : NULL;
 }
 
 static int collect_params(struct ast_node *node, int index)
@@ -177,6 +234,8 @@ static void free_locals(void)
         symbols[i].name = NULL;
         symbols[i].offset = 0;
         symbols[i].array_length = 0;
+        free(symbols[i].struct_name);
+        symbols[i].struct_name = NULL;
     }
     symbol_count = 0;
     local_stack_count = 0;
@@ -262,6 +321,11 @@ static void generate_lvalue_address(struct ast_node *node, FILE *output)
             fprintf(output, "    imull   $4, %%eax\n");
             fprintf(output, "    pop     %%edx\n");
             fprintf(output, "    addl    %%edx, %%eax\n");
+            return;
+        case AST_FIELD_ACCESS:
+            generate_lvalue_address(node->left, output);
+            fprintf(output, "    addl    $%d, %%eax\n",
+                struct_field_offset(node->left->struct_name, node->value));
             return;
         default:
             fprintf(stderr, "Expression is not assignable\n");
@@ -442,9 +506,62 @@ static void collect_globals(struct ast_node *node)
     }
 }
 
+static int add_string_literal(const char *value)
+{
+    for (int i = 0; i < string_count; i++) {
+        if (strcmp(strings[i].value, value) == 0) {
+            return strings[i].label;
+        }
+    }
+    if (string_count >= 256) {
+        fprintf(stderr, "Too many string literals\n");
+        exit(1);
+    }
+
+    strings[string_count].value = strdup(value);
+    strings[string_count].label = string_count;
+    string_count++;
+    return string_count - 1;
+}
+
+static void collect_metadata(struct ast_node *node)
+{
+    if (!node) return;
+    if (node->type == AST_STRUCT_DEF) {
+        int index;
+
+        if (struct_count >= 256) {
+            fprintf(stderr, "Too many struct definitions\n");
+            exit(1);
+        }
+
+        index = struct_count++;
+        structs[index].name = strdup(node->value);
+        structs[index].field_count = 0;
+        for (struct ast_node *field = node->left; field; field = field->right) {
+            int field_index;
+
+            if (structs[index].field_count >= 64) {
+                fprintf(stderr, "Too many fields in struct '%s'\n", node->value);
+                exit(1);
+            }
+
+            field_index = structs[index].field_count++;
+            structs[index].fields[field_index].name = strdup(field->left->value);
+            structs[index].fields[field_index].offset = field_index * 4;
+        }
+        return;
+    }
+    if (node->type == AST_STRINGLIT) {
+        node->string_label = add_string_literal(node->value);
+    }
+    collect_metadata(node->left);
+    collect_metadata(node->right);
+}
+
 static void generate_globals(FILE *output)
 {
-    if (global_count == 0) {
+    if (global_count == 0 && string_count == 0) {
         return;
     }
 
@@ -456,6 +573,14 @@ static void generate_globals(FILE *output)
         for (int j = 0; j < count; j++) {
             fprintf(output, "    .long   %d\n", globals[i].values[j]);
         }
+    }
+    for (int i = 0; i < string_count; i++) {
+        fprintf(output, ".LC%d:\n", strings[i].label);
+        fprintf(output, "    .byte   ");
+        for (const unsigned char *p = (const unsigned char *)strings[i].value; *p; p++) {
+            fprintf(output, "%u, ", *p);
+        }
+        fprintf(output, "0\n");
     }
     fprintf(output, ".text\n");
 }
@@ -488,6 +613,7 @@ void generate_program(struct ast_node *node, FILE *output)
 
     switch (node->type) {
         case AST_PROGRAM:
+            collect_metadata(node->left);
             collect_globals(node->left);
             generate_globals(output);
             generate_program(node->left, output);
@@ -500,6 +626,8 @@ void generate_program(struct ast_node *node, FILE *output)
             generate_function(node, output);
             break;
         case AST_GLOBAL_DECL:
+            break;
+        case AST_STRUCT_DEF:
             break;
         default:
             fprintf(stderr, "Unsupported program node type: %d\n", node->type);
@@ -647,6 +775,14 @@ void generate_binop(struct ast_node *node, FILE *output)
         generate_exp(node->right, output);
         fprintf(output, "    pop     %%edx\n");
 
+        if (left_is_pointer && right_is_pointer && node->type == AST_SUB) {
+            fprintf(output, "    subl    %%eax, %%edx\n");
+            fprintf(output, "    movl    %%edx, %%eax\n");
+            fprintf(output, "    cdq\n");
+            fprintf(output, "    movl    $4, %%ecx\n");
+            fprintf(output, "    idivl   %%ecx\n");
+            return;
+        }
         if (left_is_pointer && !right_is_pointer) {
             fprintf(output, "    imull   $4, %%eax\n");
             if (node->type == AST_ADD) {
@@ -767,6 +903,9 @@ void generate_exp(struct ast_node *node, FILE *output)
         case AST_INTLIT:
             fprintf(output, "    movl    $%s, %%eax\n", node->value);
             break;
+        case AST_STRINGLIT:
+            fprintf(output, "    movl    $.LC%d, %%eax\n", node->string_label);
+            break;
         case AST_IDENTIFIER:
             generate_identifier_load(node->value, output);
             break;
@@ -864,6 +1003,10 @@ void generate_exp(struct ast_node *node, FILE *output)
             fprintf(output, "    movl    (%%eax), %%eax\n");
             break;
         case AST_ARRAY_SUBSCRIPT:
+            generate_lvalue_address(node, output);
+            fprintf(output, "    movl    (%%eax), %%eax\n");
+            break;
+        case AST_FIELD_ACCESS:
             generate_lvalue_address(node, output);
             fprintf(output, "    movl    (%%eax), %%eax\n");
             break;
