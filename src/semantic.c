@@ -1,10 +1,9 @@
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "defs.h"
 #include "decl.h"
-
-#define MAX_SYMBOLS 256
 
 struct global_symbol {
     const char *name;
@@ -40,21 +39,62 @@ struct struct_symbol {
     struct struct_field fields[64];
 };
 
-static struct global_symbol globals[MAX_SYMBOLS];
-static struct local_symbol locals[MAX_SYMBOLS];
-static struct struct_symbol structs[MAX_SYMBOLS];
-static int global_count;
-static int local_count;
-static int struct_count;
-static int scope_depth;
-static int loop_depth;
-static int error_count;
-static const char *current_function;
-static CType current_return_type;
-static int current_return_pointer_depth;
-static const char *semantic_source_path;
+/*
+ * All analysis state lives in one context that the caller owns, rather than in
+ * file-scope arrays with fixed capacities. This removes the MAX_SYMBOLS ceiling,
+ * makes the pass re-runnable in-process (needed for unit tests), and is a step
+ * toward compiling several translation units.
+ */
+struct sema_ctx {
+    struct global_symbol *globals;
+    int global_count;
+    int global_capacity;
 
-static void semantic_error_at(struct ast_node *node, const char *format, ...);
+    struct local_symbol *locals;
+    int local_count;
+    int local_capacity;
+
+    struct struct_symbol *structs;
+    int struct_count;
+    int struct_capacity;
+
+    int scope_depth;
+    int loop_depth;
+    int error_count;
+
+    const char *current_function;
+    CType current_return_type;
+    int current_return_pointer_depth;
+    const char *source_path;
+};
+
+static void semantic_error_at(struct sema_ctx *ctx, struct ast_node *node,
+    const char *format, ...);
+
+/*
+ * Grow *items to hold at least one more element. Allocation failure is fatal:
+ * there is no useful way to continue analysis without a symbol table.
+ */
+static void ensure_capacity(void **items, int count, int *capacity,
+    size_t item_size)
+{
+    void *grown;
+    int next;
+
+    if (count < *capacity) {
+        return;
+    }
+
+    next = *capacity ? *capacity * 2 : 64;
+    grown = realloc(*items, (size_t)next * item_size);
+    if (!grown) {
+        fprintf(stderr, "Out of memory while growing the symbol table\n");
+        exit(EXIT_FAILURE);
+    }
+
+    *items = grown;
+    *capacity = next;
+}
 
 static const char *semantic_type_name(CType type)
 {
@@ -103,65 +143,63 @@ static int semantic_effective_pointer_depth(struct ast_node *node)
     return node->pointer_depth + (node->array_length > 0 ? 1 : 0);
 }
 
-static int find_struct(const char *name)
+static int find_struct(struct sema_ctx *ctx, const char *name)
 {
     int i;
 
     if (!name) return -1;
-    for (i = 0; i < struct_count; i++) {
-        if (strcmp(structs[i].name, name) == 0) {
+    for (i = 0; i < ctx->struct_count; i++) {
+        if (strcmp(ctx->structs[i].name, name) == 0) {
             return i;
         }
     }
     return -1;
 }
 
-static int find_struct_field(int struct_index, const char *name)
+static int find_struct_field(struct sema_ctx *ctx, int struct_index, const char *name)
 {
     int i;
 
     if (struct_index < 0) return -1;
-    for (i = 0; i < structs[struct_index].field_count; i++) {
-        if (strcmp(structs[struct_index].fields[i].name, name) == 0) {
+    for (i = 0; i < ctx->structs[struct_index].field_count; i++) {
+        if (strcmp(ctx->structs[struct_index].fields[i].name, name) == 0) {
             return i;
         }
     }
     return -1;
 }
 
-static void add_struct(struct ast_node *node)
+static void add_struct(struct sema_ctx *ctx, struct ast_node *node)
 {
     struct ast_node *field;
 
-    if (find_struct(node->value) >= 0) {
-        semantic_error_at(node, "duplicate struct definition '%s'", node->value);
+    if (find_struct(ctx, node->value) >= 0) {
+        semantic_error_at(ctx, node, "duplicate struct definition '%s'", node->value);
         return;
     }
-    if (struct_count >= MAX_SYMBOLS) {
-        semantic_error_at(node, "too many struct definitions");
-        return;
-    }
-    structs[struct_count].name = node->value;
-    structs[struct_count].field_count = 0;
+    ensure_capacity((void **)&ctx->structs, ctx->struct_count,
+        &ctx->struct_capacity, sizeof(*ctx->structs));
+    ctx->structs[ctx->struct_count].name = node->value;
+    ctx->structs[ctx->struct_count].field_count = 0;
     for (field = node->left; field; field = field->right) {
         struct ast_node *decl = field->left;
-        int existing = find_struct_field(struct_count, decl->value);
-        int index = structs[struct_count].field_count;
+        int existing = find_struct_field(ctx, ctx->struct_count, decl->value);
+        int index = ctx->structs[ctx->struct_count].field_count;
         if (existing >= 0) {
-            semantic_error_at(decl, "duplicate field '%s'", decl->value);
+            semantic_error_at(ctx, decl, "duplicate field '%s'", decl->value);
             continue;
         }
         if (index >= 64) {
-            semantic_error_at(decl, "too many fields in struct '%s'", node->value);
+            semantic_error_at(ctx, decl, "too many fields in struct '%s'", node->value);
             break;
         }
-        structs[struct_count].fields[index].name = decl->value;
-        structs[struct_count].fields[index].type = decl->data_type;
-        structs[struct_count].fields[index].pointer_depth = decl->pointer_depth;
-        structs[struct_count].fields[index].offset = index * 4;
-        structs[struct_count].field_count++;
+        ctx->structs[ctx->struct_count].fields[index].name = decl->value;
+        ctx->structs[ctx->struct_count].fields[index].type = decl->data_type;
+        ctx->structs[ctx->struct_count].fields[index].pointer_depth = decl->pointer_depth;
+        ctx->structs[ctx->struct_count].fields[index].offset = index * 4;
+        ctx->structs[ctx->struct_count].field_count++;
     }
-    struct_count++;
+    ctx->struct_count++;
 }
 
 static CType semantic_type_from_name(const char *name)
@@ -177,17 +215,17 @@ static CType semantic_type_from_name(const char *name)
     return TYPE_INT;
 }
 
-static void semantic_error_at(struct ast_node *node, const char *format, ...)
+static void semantic_error_at(struct sema_ctx *ctx, struct ast_node *node, const char *format, ...)
 {
     va_list args;
 
     fprintf(stderr, "Semantic error");
     if (node && node->location.line > 0) {
-        fprintf(stderr, " at %s:%d:%d", semantic_source_path,
+        fprintf(stderr, " at %s:%d:%d", ctx->source_path,
             node->location.line, node->location.column);
     }
-    if (current_function) {
-        fprintf(stderr, " in function '%s'", current_function);
+    if (ctx->current_function) {
+        fprintf(stderr, " in function '%s'", ctx->current_function);
     }
     fprintf(stderr, ": ");
 
@@ -195,7 +233,7 @@ static void semantic_error_at(struct ast_node *node, const char *format, ...)
     vfprintf(stderr, format, args);
     va_end(args);
     fprintf(stderr, "\n");
-    error_count++;
+    ctx->error_count++;
 }
 
 static int count_list(struct ast_node *node, ASTNodeType list_type)
@@ -223,120 +261,116 @@ static struct ast_node *initializer_items(struct ast_node *node)
     return node;
 }
 
-static int find_global(const char *name)
+static int find_global(struct sema_ctx *ctx, const char *name)
 {
     int i;
 
-    for (i = 0; i < global_count; i++) {
-        if (strcmp(globals[i].name, name) == 0) {
+    for (i = 0; i < ctx->global_count; i++) {
+        if (strcmp(ctx->globals[i].name, name) == 0) {
             return i;
         }
     }
     return -1;
 }
 
-static int find_local(const char *name)
+static int find_local(struct sema_ctx *ctx, const char *name)
 {
     int i;
 
-    for (i = local_count - 1; i >= 0; i--) {
-        if (strcmp(locals[i].name, name) == 0) {
+    for (i = ctx->local_count - 1; i >= 0; i--) {
+        if (strcmp(ctx->locals[i].name, name) == 0) {
             return i;
         }
     }
     return -1;
 }
 
-static void add_global(struct ast_node *node)
+static void add_global(struct sema_ctx *ctx, struct ast_node *node)
 {
     const char *name = node->value;
     int is_function = node->type == AST_FUNCTION;
-    int existing = find_global(name);
+    int existing = find_global(ctx, name);
     struct ast_node *param;
 
     if (existing >= 0) {
-        semantic_error_at(node, "duplicate top-level declaration of '%s'", name);
+        semantic_error_at(ctx, node, "duplicate top-level declaration of '%s'", name);
         return;
     }
-    if (global_count >= MAX_SYMBOLS) {
-        semantic_error_at(node, "too many top-level declarations");
-        return;
-    }
-    if (node->struct_name && find_struct(node->struct_name) < 0) {
-        semantic_error_at(node, "unknown struct type '%s'", node->struct_name);
+    ensure_capacity((void **)&ctx->globals, ctx->global_count,
+        &ctx->global_capacity, sizeof(*ctx->globals));
+    if (node->struct_name && find_struct(ctx, node->struct_name) < 0) {
+        semantic_error_at(ctx, node, "unknown struct type '%s'", node->struct_name);
         return;
     }
 
-    globals[global_count].name = name;
-    globals[global_count].is_function = is_function;
-    globals[global_count].type = node->data_type;
-    globals[global_count].pointer_depth = node->pointer_depth;
-    globals[global_count].array_length = node->array_length;
-    globals[global_count].struct_name = node->struct_name;
-    globals[global_count].parameter_count = 0;
+    ctx->globals[ctx->global_count].name = name;
+    ctx->globals[ctx->global_count].is_function = is_function;
+    ctx->globals[ctx->global_count].type = node->data_type;
+    ctx->globals[ctx->global_count].pointer_depth = node->pointer_depth;
+    ctx->globals[ctx->global_count].array_length = node->array_length;
+    ctx->globals[ctx->global_count].struct_name = node->struct_name;
+    ctx->globals[ctx->global_count].parameter_count = 0;
     if (is_function) {
         for (param = node->left; param; param = param->right) {
-            if (globals[global_count].parameter_count >= 64) {
-                semantic_error_at(node, "function '%s' has too many parameters", name);
+            if (ctx->globals[ctx->global_count].parameter_count >= 64) {
+                semantic_error_at(ctx, node, "function '%s' has too many parameters", name);
                 break;
             }
-            globals[global_count].parameter_types[globals[global_count].parameter_count++] =
+            ctx->globals[ctx->global_count].parameter_types[ctx->globals[ctx->global_count].parameter_count++] =
                 param->left->data_type;
-            globals[global_count].parameter_pointer_depths[globals[global_count].parameter_count - 1] =
+            ctx->globals[ctx->global_count].parameter_pointer_depths[ctx->globals[ctx->global_count].parameter_count - 1] =
                 param->left->pointer_depth;
         }
     }
-    global_count++;
+    ctx->global_count++;
 }
 
-static void add_local(struct ast_node *node, CType type)
+static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
 {
     const char *name = node->value;
-    int existing = find_local(name);
+    int existing = find_local(ctx, name);
 
     if (existing >= 0) {
-        if (locals[existing].depth == scope_depth) {
-            semantic_error_at(node, "duplicate declaration of '%s'", name);
+        if (ctx->locals[existing].depth == ctx->scope_depth) {
+            semantic_error_at(ctx, node, "duplicate declaration of '%s'", name);
         } else {
-            semantic_error_at(node, "variable shadowing is not supported for '%s'", name);
+            semantic_error_at(ctx, node, "variable shadowing is not supported for '%s'", name);
         }
         return;
     }
-    if (local_count >= MAX_SYMBOLS) {
-        semantic_error_at(node, "too many local declarations");
+    ensure_capacity((void **)&ctx->locals, ctx->local_count,
+        &ctx->local_capacity, sizeof(*ctx->locals));
+    if (node->struct_name && find_struct(ctx, node->struct_name) < 0) {
+        semantic_error_at(ctx, node, "unknown struct type '%s'", node->struct_name);
         return;
     }
-    if (node->struct_name && find_struct(node->struct_name) < 0) {
-        semantic_error_at(node, "unknown struct type '%s'", node->struct_name);
-        return;
-    }
 
-    locals[local_count].name = name;
-    locals[local_count].type = type;
-    locals[local_count].pointer_depth = node->pointer_depth;
-    locals[local_count].array_length = node->array_length;
-    locals[local_count].struct_name = node->struct_name;
-    locals[local_count].depth = scope_depth;
-    local_count++;
+    ctx->locals[ctx->local_count].name = name;
+    ctx->locals[ctx->local_count].type = type;
+    ctx->locals[ctx->local_count].pointer_depth = node->pointer_depth;
+    ctx->locals[ctx->local_count].array_length = node->array_length;
+    ctx->locals[ctx->local_count].struct_name = node->struct_name;
+    ctx->locals[ctx->local_count].depth = ctx->scope_depth;
+    ctx->local_count++;
 }
 
-static void enter_scope(void)
+static void enter_scope(struct sema_ctx *ctx)
 {
-    scope_depth++;
+    ctx->scope_depth++;
 }
 
-static void leave_scope(void)
+static void leave_scope(struct sema_ctx *ctx)
 {
-    while (local_count > 0 && locals[local_count - 1].depth == scope_depth) {
-        local_count--;
+    while (ctx->local_count > 0 && ctx->locals[ctx->local_count - 1].depth == ctx->scope_depth) {
+        ctx->local_count--;
     }
-    scope_depth--;
+    ctx->scope_depth--;
 }
 
-static void analyze_expression(struct ast_node *node);
-static void analyze_statement(struct ast_node *node);
+static void analyze_expression(struct sema_ctx *ctx, struct ast_node *node);
+static void analyze_statement(struct sema_ctx *ctx, struct ast_node *node);
 
-static void analyze_expression(struct ast_node *node)
+static void analyze_expression(struct sema_ctx *ctx, struct ast_node *node)
 {
     int symbol;
     int actual_count;
@@ -351,33 +385,33 @@ static void analyze_expression(struct ast_node *node)
             return;
         case AST_INITIALIZER_LIST:
             for (struct ast_node *item = initializer_items(node); item; item = item->right) {
-                analyze_expression(item->left);
+                analyze_expression(ctx, item->left);
             }
             return;
         case AST_IDENTIFIER:
-            symbol = find_global(node->value);
-            if (find_local(node->value) < 0 &&
-                (symbol < 0 || globals[symbol].is_function)) {
-                semantic_error_at(node, "use of undeclared variable '%s'", node->value);
+            symbol = find_global(ctx, node->value);
+            if (find_local(ctx, node->value) < 0 &&
+                (symbol < 0 || ctx->globals[symbol].is_function)) {
+                semantic_error_at(ctx, node, "use of undeclared variable '%s'", node->value);
             }
             return;
         case AST_CALL:
-            symbol = find_global(node->value);
-            if (find_local(node->value) >= 0) {
-                semantic_error_at(node, "called object '%s' is not a function", node->value);
+            symbol = find_global(ctx, node->value);
+            if (find_local(ctx, node->value) >= 0) {
+                semantic_error_at(ctx, node, "called object '%s' is not a function", node->value);
             } else if (symbol < 0) {
-                semantic_error_at(node, "call to undeclared function '%s'", node->value);
-            } else if (!globals[symbol].is_function) {
-                semantic_error_at(node, "called object '%s' is not a function", node->value);
+                semantic_error_at(ctx, node, "call to undeclared function '%s'", node->value);
+            } else if (!ctx->globals[symbol].is_function) {
+                semantic_error_at(ctx, node, "called object '%s' is not a function", node->value);
             } else {
                 actual_count = count_list(node->left, AST_ARG_LIST);
-                if (actual_count != globals[symbol].parameter_count) {
-                    semantic_error_at(node, "function '%s' expects %d argument(s), but %d provided",
-                        node->value, globals[symbol].parameter_count, actual_count);
+                if (actual_count != ctx->globals[symbol].parameter_count) {
+                    semantic_error_at(ctx, node, "function '%s' expects %d argument(s), but %d provided",
+                        node->value, ctx->globals[symbol].parameter_count, actual_count);
                 }
             }
             for (struct ast_node *arg = node->left; arg; arg = arg->right) {
-                analyze_expression(arg->type == AST_ARG_LIST ? arg->left : arg);
+                analyze_expression(ctx, arg->type == AST_ARG_LIST ? arg->left : arg);
                 if (arg->type != AST_ARG_LIST) {
                     break;
                 }
@@ -391,34 +425,34 @@ static void analyze_expression(struct ast_node *node)
         case AST_PRE_DECREMENT:
         case AST_POST_INCREMENT:
         case AST_POST_DECREMENT:
-            analyze_expression(node->left);
+            analyze_expression(ctx, node->left);
             return;
         case AST_CONDITIONAL:
-            analyze_expression(node->left);
-            analyze_expression(node->right->left);
-            analyze_expression(node->right->right);
+            analyze_expression(ctx, node->left);
+            analyze_expression(ctx, node->right->left);
+            analyze_expression(ctx, node->right->right);
             return;
         default:
-            analyze_expression(node->left);
-            analyze_expression(node->right);
+            analyze_expression(ctx, node->left);
+            analyze_expression(ctx, node->right);
             return;
     }
 }
 
-static void analyze_block(struct ast_node *node, int creates_scope)
+static void analyze_block(struct sema_ctx *ctx, struct ast_node *node, int creates_scope)
 {
     if (creates_scope) {
-        enter_scope();
+        enter_scope(ctx);
     }
     if (node) {
-        analyze_statement(node->left);
+        analyze_statement(ctx, node->left);
     }
     if (creates_scope) {
-        leave_scope();
+        leave_scope(ctx);
     }
 }
 
-static void analyze_statement(struct ast_node *node)
+static void analyze_statement(struct sema_ctx *ctx, struct ast_node *node)
 {
     struct ast_node *parts;
     struct ast_node *condition_and_post;
@@ -429,79 +463,79 @@ static void analyze_statement(struct ast_node *node)
 
     switch (node->type) {
         case AST_BLOCK:
-            analyze_block(node, 1);
+            analyze_block(ctx, node, 1);
             break;
         case AST_STATEMENT_LIST:
-            analyze_statement(node->left);
-            analyze_statement(node->right);
+            analyze_statement(ctx, node->left);
+            analyze_statement(ctx, node->right);
             break;
         case AST_DECL:
-            add_local(node, node->data_type);
-            analyze_expression(node->left);
+            add_local(ctx, node, node->data_type);
+            analyze_expression(ctx, node->left);
             break;
         case AST_EXPR_STMT:
         case AST_RETURN:
-            analyze_expression(node->left);
+            analyze_expression(ctx, node->left);
             break;
         case AST_IF:
-            analyze_expression(node->left);
-            analyze_statement(node->right->left);
-            analyze_statement(node->right->right);
+            analyze_expression(ctx, node->left);
+            analyze_statement(ctx, node->right->left);
+            analyze_statement(ctx, node->right->right);
             break;
         case AST_WHILE:
-            analyze_expression(node->left);
-            loop_depth++;
-            analyze_statement(node->right);
-            loop_depth--;
+            analyze_expression(ctx, node->left);
+            ctx->loop_depth++;
+            analyze_statement(ctx, node->right);
+            ctx->loop_depth--;
             break;
         case AST_FOR:
-            enter_scope();
+            enter_scope(ctx);
             parts = node->left;
             condition_and_post = parts->right;
             if (parts->left && parts->left->type == AST_DECL) {
-                analyze_statement(parts->left);
+                analyze_statement(ctx, parts->left);
             } else {
-                analyze_expression(parts->left);
+                analyze_expression(ctx, parts->left);
             }
-            analyze_expression(condition_and_post->left);
-            analyze_expression(condition_and_post->right);
-            loop_depth++;
-            analyze_statement(node->right);
-            loop_depth--;
-            leave_scope();
+            analyze_expression(ctx, condition_and_post->left);
+            analyze_expression(ctx, condition_and_post->right);
+            ctx->loop_depth++;
+            analyze_statement(ctx, node->right);
+            ctx->loop_depth--;
+            leave_scope(ctx);
             break;
         case AST_BREAK:
-            if (loop_depth == 0) {
-                semantic_error_at(node, "'break' statement is not inside a loop");
+            if (ctx->loop_depth == 0) {
+                semantic_error_at(ctx, node, "'break' statement is not inside a loop");
             }
             break;
         case AST_CONTINUE:
-            if (loop_depth == 0) {
-                semantic_error_at(node, "'continue' statement is not inside a loop");
+            if (ctx->loop_depth == 0) {
+                semantic_error_at(ctx, node, "'continue' statement is not inside a loop");
             }
             break;
         default:
-            analyze_expression(node);
+            analyze_expression(ctx, node);
             break;
     }
 }
 
-static void collect_top_level(struct ast_node *node)
+static void collect_top_level(struct sema_ctx *ctx, struct ast_node *node)
 {
     if (!node) {
         return;
     }
     if (node->type == AST_PROGRAM) {
-        collect_top_level(node->left);
+        collect_top_level(ctx, node->left);
     } else if (node->type == AST_FUNCTION_LIST) {
-        collect_top_level(node->left);
-        collect_top_level(node->right);
+        collect_top_level(ctx, node->left);
+        collect_top_level(ctx, node->right);
     } else if (node->type == AST_FUNCTION) {
-        add_global(node);
+        add_global(ctx, node);
     } else if (node->type == AST_STRUCT_DEF) {
-        add_struct(node);
+        add_struct(ctx, node);
     } else if (node->type == AST_GLOBAL_DECL) {
-        add_global(node);
+        add_global(ctx, node);
     }
 }
 
@@ -556,7 +590,7 @@ static int is_constant_expression(struct ast_node *node)
     }
 }
 
-static void analyze_top_level(struct ast_node *node)
+static void analyze_top_level(struct sema_ctx *ctx, struct ast_node *node)
 {
     struct ast_node *param;
 
@@ -564,29 +598,29 @@ static void analyze_top_level(struct ast_node *node)
         return;
     }
     if (node->type == AST_PROGRAM) {
-        analyze_top_level(node->left);
+        analyze_top_level(ctx, node->left);
     } else if (node->type == AST_FUNCTION_LIST) {
-        analyze_top_level(node->left);
-        analyze_top_level(node->right);
+        analyze_top_level(ctx, node->left);
+        analyze_top_level(ctx, node->right);
     } else if (node->type == AST_GLOBAL_DECL) {
         if (!is_constant_expression(node->left)) {
-            semantic_error_at(node, "initializer for global '%s' is not a constant expression", node->value);
+            semantic_error_at(ctx, node, "initializer for global '%s' is not a constant expression", node->value);
         }
     } else if (node->type == AST_STRUCT_DEF) {
         return;
     } else if (node->type == AST_FUNCTION) {
-        current_function = node->value;
-        local_count = 0;
-        scope_depth = 1;
-        loop_depth = 0;
+        ctx->current_function = node->value;
+        ctx->local_count = 0;
+        ctx->scope_depth = 1;
+        ctx->loop_depth = 0;
 
         for (param = node->left; param; param = param->right) {
             if (param->type == AST_PARAM_LIST) {
-                add_local(param->left, param->left->data_type);
+                add_local(ctx, param->left, param->left->data_type);
             }
         }
-        analyze_block(node->right, 0);
-        current_function = NULL;
+        analyze_block(ctx, node->right, 0);
+        ctx->current_function = NULL;
     }
 }
 
@@ -624,13 +658,13 @@ static void insert_conversion(struct ast_node **slot, CType target)
     *slot = cast;
 }
 
-static CType check_expression_type(struct ast_node **slot);
-static void check_initializer_list_types(struct ast_node *declaration);
+static CType check_expression_type(struct sema_ctx *ctx, struct ast_node **slot);
+static void check_initializer_list_types(struct sema_ctx *ctx, struct ast_node *declaration);
 
-static CType check_binary_type(struct ast_node *node)
+static CType check_binary_type(struct sema_ctx *ctx, struct ast_node *node)
 {
-    CType left = check_expression_type(&node->left);
-    CType right = check_expression_type(&node->right);
+    CType left = check_expression_type(ctx, &node->left);
+    CType right = check_expression_type(ctx, &node->right);
     CType common;
     int left_pointer_depth = semantic_effective_pointer_depth(node->left);
     int right_pointer_depth = semantic_effective_pointer_depth(node->right);
@@ -657,7 +691,7 @@ static CType check_binary_type(struct ast_node *node)
             left_pointer_depth > 0 &&
             right_pointer_depth > 0) {
             if (left != right || left_pointer_depth != right_pointer_depth) {
-                semantic_error_at(node, "cannot subtract incompatible pointer types");
+                semantic_error_at(ctx, node, "cannot subtract incompatible pointer types");
                 return node->data_type = TYPE_INVALID;
             }
             node->pointer_depth = 0;
@@ -671,7 +705,7 @@ static CType check_binary_type(struct ast_node *node)
             node->array_length = 0;
             return node->data_type = left;
         }
-        semantic_error_at(node, "invalid operands to pointer arithmetic");
+        semantic_error_at(ctx, node, "invalid operands to pointer arithmetic");
         return node->data_type = TYPE_INVALID;
     }
     if (node->type == AST_LOGICAL_AND || node->type == AST_LOGICAL_OR) {
@@ -696,7 +730,7 @@ static CType check_binary_type(struct ast_node *node)
     return node->data_type = common;
 }
 
-static CType check_expression_type(struct ast_node **slot)
+static CType check_expression_type(struct sema_ctx *ctx, struct ast_node **slot)
 {
     struct ast_node *node;
     struct ast_node *argument;
@@ -721,80 +755,80 @@ static CType check_expression_type(struct ast_node **slot)
         case AST_SIZEOF:
             return node->data_type = TYPE_UINT;
         case AST_INITIALIZER_LIST:
-            semantic_error_at(node, "initializer list is not valid in this expression");
+            semantic_error_at(ctx, node, "initializer list is not valid in this expression");
             return node->data_type = TYPE_INVALID;
         case AST_IDENTIFIER:
-            local = find_local(node->value);
-            global = find_global(node->value);
+            local = find_local(ctx, node->value);
+            global = find_global(ctx, node->value);
             if (local >= 0) {
-                node->data_type = locals[local].type;
-                node->pointer_depth = locals[local].pointer_depth;
-                node->array_length = locals[local].array_length;
-                node->struct_name = locals[local].struct_name ? strdup(locals[local].struct_name) : NULL;
+                node->data_type = ctx->locals[local].type;
+                node->pointer_depth = ctx->locals[local].pointer_depth;
+                node->array_length = ctx->locals[local].array_length;
+                node->struct_name = ctx->locals[local].struct_name ? strdup(ctx->locals[local].struct_name) : NULL;
                 return node->data_type;
             }
-            if (global >= 0 && !globals[global].is_function) {
-                node->pointer_depth = globals[global].pointer_depth;
-                node->array_length = globals[global].array_length;
-                node->struct_name = globals[global].struct_name ? strdup(globals[global].struct_name) : NULL;
-                return node->data_type = globals[global].type;
+            if (global >= 0 && !ctx->globals[global].is_function) {
+                node->pointer_depth = ctx->globals[global].pointer_depth;
+                node->array_length = ctx->globals[global].array_length;
+                node->struct_name = ctx->globals[global].struct_name ? strdup(ctx->globals[global].struct_name) : NULL;
+                return node->data_type = ctx->globals[global].type;
             }
             return node->data_type = TYPE_INVALID;
         case AST_FIELD_ACCESS: {
             int struct_index;
             int field_index;
-            check_expression_type(&node->left);
+            check_expression_type(ctx, &node->left);
             if (!node->left->struct_name || node->left->pointer_depth > 0) {
-                semantic_error_at(node, "field access requires a struct value");
+                semantic_error_at(ctx, node, "field access requires a struct value");
                 return node->data_type = TYPE_INVALID;
             }
-            struct_index = find_struct(node->left->struct_name);
-            field_index = find_struct_field(struct_index, node->value);
+            struct_index = find_struct(ctx, node->left->struct_name);
+            field_index = find_struct_field(ctx, struct_index, node->value);
             if (field_index < 0) {
-                semantic_error_at(node, "struct '%s' has no field '%s'",
+                semantic_error_at(ctx, node, "struct '%s' has no field '%s'",
                     node->left->struct_name, node->value);
                 return node->data_type = TYPE_INVALID;
             }
-            node->data_type = structs[struct_index].fields[field_index].type;
-            node->pointer_depth = structs[struct_index].fields[field_index].pointer_depth;
+            node->data_type = ctx->structs[struct_index].fields[field_index].type;
+            node->pointer_depth = ctx->structs[struct_index].fields[field_index].pointer_depth;
             node->array_length = 0;
             return node->data_type;
         }
         case AST_CALL:
-            global = find_global(node->value);
+            global = find_global(ctx, node->value);
             argument_index = 0;
             for (argument = node->left; argument; argument = argument->right) {
-                check_expression_type(&argument->left);
-                if (global >= 0 && globals[global].is_function &&
-                    argument_index < globals[global].parameter_count) {
+                check_expression_type(ctx, &argument->left);
+                if (global >= 0 && ctx->globals[global].is_function &&
+                    argument_index < ctx->globals[global].parameter_count) {
                     if (semantic_effective_pointer_depth(argument->left) !=
-                        globals[global].parameter_pointer_depths[argument_index]) {
-                        semantic_format_type(globals[global].parameter_types[argument_index],
-                            globals[global].parameter_pointer_depths[argument_index], 0,
+                        ctx->globals[global].parameter_pointer_depths[argument_index]) {
+                        semantic_format_type(ctx->globals[global].parameter_types[argument_index],
+                            ctx->globals[global].parameter_pointer_depths[argument_index], 0,
                             left_name, sizeof(left_name));
                         semantic_format_type(argument->left->data_type,
                             semantic_effective_pointer_depth(argument->left), 0,
                             right_name, sizeof(right_name));
-                        semantic_error_at(argument->left, "cannot pass %s as %s", right_name, left_name);
+                        semantic_error_at(ctx, argument->left, "cannot pass %s as %s", right_name, left_name);
                     } else if (semantic_effective_pointer_depth(argument->left) == 0) {
                         insert_conversion(&argument->left,
-                            globals[global].parameter_types[argument_index]);
+                            ctx->globals[global].parameter_types[argument_index]);
                     }
                 }
                 argument_index++;
             }
-            if (global >= 0 && globals[global].is_function) {
-                node->pointer_depth = globals[global].pointer_depth;
-                return node->data_type = globals[global].type;
+            if (global >= 0 && ctx->globals[global].is_function) {
+                node->pointer_depth = ctx->globals[global].pointer_depth;
+                return node->data_type = ctx->globals[global].type;
             }
             return node->data_type = TYPE_INVALID;
         case AST_ADDRESS_OF:
-            check_expression_type(&node->left);
+            check_expression_type(ctx, &node->left);
             if (node->left->type != AST_IDENTIFIER &&
                 node->left->type != AST_DEREFERENCE &&
                 node->left->type != AST_FIELD_ACCESS &&
                 node->left->type != AST_ARRAY_SUBSCRIPT) {
-                semantic_error_at(node, "operand of '&' must be an lvalue");
+                semantic_error_at(ctx, node, "operand of '&' must be an lvalue");
                 return node->data_type = TYPE_INVALID;
             }
             node->data_type = node->left->data_type;
@@ -802,9 +836,9 @@ static CType check_expression_type(struct ast_node **slot)
             node->array_length = 0;
             return node->data_type;
         case AST_DEREFERENCE:
-            check_expression_type(&node->left);
+            check_expression_type(ctx, &node->left);
             if (node->left->pointer_depth <= 0) {
-                semantic_error_at(node, "cannot dereference non-pointer expression");
+                semantic_error_at(ctx, node, "cannot dereference non-pointer expression");
                 return node->data_type = TYPE_INVALID;
             }
             node->data_type = node->left->data_type;
@@ -812,14 +846,14 @@ static CType check_expression_type(struct ast_node **slot)
             node->array_length = 0;
             return node->data_type;
         case AST_ARRAY_SUBSCRIPT:
-            check_expression_type(&node->left);
-            check_expression_type(&node->right);
+            check_expression_type(ctx, &node->left);
+            check_expression_type(ctx, &node->right);
             if (!semantic_is_integer(node->right->data_type, node->right->pointer_depth,
                     node->right->array_length)) {
-                semantic_error_at(node->right, "array subscript must be an integer");
+                semantic_error_at(ctx, node->right, "array subscript must be an integer");
             }
             if (node->left->array_length <= 0 && node->left->pointer_depth <= 0) {
-                semantic_error_at(node, "subscripted expression is not an array or pointer");
+                semantic_error_at(ctx, node, "subscripted expression is not an array or pointer");
                 return node->data_type = TYPE_INVALID;
             }
             node->data_type = node->left->data_type;
@@ -828,30 +862,30 @@ static CType check_expression_type(struct ast_node **slot)
             node->array_length = 0;
             return node->data_type;
         case AST_CAST:
-            check_expression_type(&node->left);
+            check_expression_type(ctx, &node->left);
             if (node->data_type == TYPE_INVALID)
                 node->data_type = semantic_type_from_name(node->value);
             return node->data_type;
         case AST_NEGATION:
         case AST_BITWISE_COMPLEMENT:
-            left = integer_promotion(check_expression_type(&node->left));
+            left = integer_promotion(check_expression_type(ctx, &node->left));
             insert_conversion(&node->left, left);
             return node->data_type = left;
         case AST_LOGICAL_NEGATION:
-            check_expression_type(&node->left);
+            check_expression_type(ctx, &node->left);
             return node->data_type = TYPE_INT;
         case AST_PRE_INCREMENT:
         case AST_PRE_DECREMENT:
         case AST_POST_INCREMENT:
         case AST_POST_DECREMENT:
-            node->data_type = check_expression_type(&node->left);
+            node->data_type = check_expression_type(ctx, &node->left);
             node->pointer_depth = semantic_effective_pointer_depth(node->left);
             return node->data_type;
         case AST_ASSIGN:
-            left = check_expression_type(&node->left);
-            check_expression_type(&node->right);
+            left = check_expression_type(ctx, &node->left);
+            check_expression_type(ctx, &node->right);
             if (node->left->array_length > 0) {
-                semantic_error_at(node->left, "cannot assign to array '%s'", node->left->value);
+                semantic_error_at(ctx, node->left, "cannot assign to array '%s'", node->left->value);
             } else if (!semantic_type_matches(left, semantic_effective_pointer_depth(node->left),
                     node->right->data_type, semantic_effective_pointer_depth(node->right))) {
                 if (semantic_effective_pointer_depth(node->left) > 0 ||
@@ -861,7 +895,7 @@ static CType check_expression_type(struct ast_node **slot)
                     semantic_format_type(node->right->data_type,
                         semantic_effective_pointer_depth(node->right), 0,
                         right_name, sizeof(right_name));
-                    semantic_error_at(node, "cannot assign %s to %s", right_name, left_name);
+                    semantic_error_at(ctx, node, "cannot assign %s to %s", right_name, left_name);
                 } else {
                     insert_conversion(&node->right, left);
                 }
@@ -869,22 +903,22 @@ static CType check_expression_type(struct ast_node **slot)
             node->pointer_depth = semantic_effective_pointer_depth(node->left);
             return node->data_type = left;
         case AST_CONDITIONAL:
-            check_expression_type(&node->left);
-            left = check_expression_type(&node->right->left);
-            right = check_expression_type(&node->right->right);
+            check_expression_type(ctx, &node->left);
+            left = check_expression_type(ctx, &node->right->left);
+            right = check_expression_type(ctx, &node->right->right);
             common = usual_arithmetic_type(left, right);
             insert_conversion(&node->right->left, common);
             insert_conversion(&node->right->right, common);
             return node->data_type = common;
         case AST_COMMA:
-            check_expression_type(&node->left);
-            return node->data_type = check_expression_type(&node->right);
+            check_expression_type(ctx, &node->left);
+            return node->data_type = check_expression_type(ctx, &node->right);
         default:
-            return check_binary_type(node);
+            return check_binary_type(ctx, node);
     }
 }
 
-static void check_initializer_list_types(struct ast_node *declaration)
+static void check_initializer_list_types(struct sema_ctx *ctx, struct ast_node *declaration)
 {
     int index = 0;
     struct ast_node *item;
@@ -893,17 +927,17 @@ static void check_initializer_list_types(struct ast_node *declaration)
         return;
     }
     if (declaration->left->type != AST_INITIALIZER_LIST) {
-        semantic_error_at(declaration->left, "array initializer must be brace-enclosed");
+        semantic_error_at(ctx, declaration->left, "array initializer must be brace-enclosed");
         return;
     }
 
     for (item = initializer_items(declaration->left); item; item = item->right) {
         if (index >= declaration->array_length) {
-            semantic_error_at(item->left ? item->left : item,
+            semantic_error_at(ctx, item->left ? item->left : item,
                 "too many initializers for array '%s'", declaration->value);
             return;
         }
-        check_expression_type(&item->left);
+        check_expression_type(ctx, &item->left);
         if (item->left) {
             insert_conversion(&item->left, declaration->data_type);
         }
@@ -911,7 +945,7 @@ static void check_initializer_list_types(struct ast_node *declaration)
     }
 }
 
-static void check_statement_types(struct ast_node *node)
+static void check_statement_types(struct sema_ctx *ctx, struct ast_node *node)
 {
     struct ast_node *parts;
     struct ast_node *condition_and_post;
@@ -919,23 +953,23 @@ static void check_statement_types(struct ast_node *node)
     if (!node) return;
     switch (node->type) {
         case AST_BLOCK:
-            enter_scope();
-            check_statement_types(node->left);
-            leave_scope();
+            enter_scope(ctx);
+            check_statement_types(ctx, node->left);
+            leave_scope(ctx);
             break;
         case AST_STATEMENT_LIST:
-            check_statement_types(node->left);
-            check_statement_types(node->right);
+            check_statement_types(ctx, node->left);
+            check_statement_types(ctx, node->right);
             break;
         case AST_DECL:
-            add_local(node, node->data_type);
+            add_local(ctx, node, node->data_type);
             if (node->left) {
                 if (node->array_length > 0) {
-                    check_initializer_list_types(node);
+                    check_initializer_list_types(ctx, node);
                 } else if (node->left->type == AST_INITIALIZER_LIST) {
-                    semantic_error_at(node->left, "initializer list is only valid for arrays");
+                    semantic_error_at(ctx, node->left, "initializer list is only valid for arrays");
                 } else {
-                    check_expression_type(&node->left);
+                    check_expression_type(ctx, &node->left);
                     if (node->pointer_depth > 0 || semantic_effective_pointer_depth(node->left) > 0) {
                     if (!semantic_type_matches(node->data_type, node->pointer_depth,
                             node->left->data_type, semantic_effective_pointer_depth(node->left))) {
@@ -946,7 +980,7 @@ static void check_statement_types(struct ast_node *node)
                         semantic_format_type(node->left->data_type,
                             semantic_effective_pointer_depth(node->left), 0,
                             right_name, sizeof(right_name));
-                        semantic_error_at(node, "cannot initialize %s with %s", left_name, right_name);
+                        semantic_error_at(ctx, node, "cannot initialize %s with %s", left_name, right_name);
                     }
                     } else {
                         insert_conversion(&node->left, node->data_type);
@@ -955,101 +989,110 @@ static void check_statement_types(struct ast_node *node)
             }
             break;
         case AST_EXPR_STMT:
-            check_expression_type(&node->left);
+            check_expression_type(ctx, &node->left);
             break;
         case AST_RETURN:
-            check_expression_type(&node->left);
-            if (current_return_pointer_depth > 0 || semantic_effective_pointer_depth(node->left) > 0) {
-                if (!semantic_type_matches(current_return_type, current_return_pointer_depth,
+            check_expression_type(ctx, &node->left);
+            if (ctx->current_return_pointer_depth > 0 || semantic_effective_pointer_depth(node->left) > 0) {
+                if (!semantic_type_matches(ctx->current_return_type, ctx->current_return_pointer_depth,
                         node->left->data_type, semantic_effective_pointer_depth(node->left))) {
                     char left_name[64];
                     char right_name[64];
-                    semantic_format_type(current_return_type, current_return_pointer_depth, 0,
+                    semantic_format_type(ctx->current_return_type, ctx->current_return_pointer_depth, 0,
                         left_name, sizeof(left_name));
                     semantic_format_type(node->left->data_type,
                         semantic_effective_pointer_depth(node->left), 0,
                         right_name, sizeof(right_name));
-                    semantic_error_at(node, "cannot return %s from function returning %s",
+                    semantic_error_at(ctx, node, "cannot return %s from function returning %s",
                         right_name, left_name);
                 }
             } else {
-                insert_conversion(&node->left, current_return_type);
+                insert_conversion(&node->left, ctx->current_return_type);
             }
             break;
         case AST_IF:
-            check_expression_type(&node->left);
-            check_statement_types(node->right->left);
-            check_statement_types(node->right->right);
+            check_expression_type(ctx, &node->left);
+            check_statement_types(ctx, node->right->left);
+            check_statement_types(ctx, node->right->right);
             break;
         case AST_WHILE:
-            check_expression_type(&node->left);
-            check_statement_types(node->right);
+            check_expression_type(ctx, &node->left);
+            check_statement_types(ctx, node->right);
             break;
         case AST_FOR:
-            enter_scope();
+            enter_scope(ctx);
             parts = node->left;
             condition_and_post = parts->right;
             if (parts->left && parts->left->type == AST_DECL)
-                check_statement_types(parts->left);
+                check_statement_types(ctx, parts->left);
             else
-                check_expression_type(&parts->left);
-            check_expression_type(&condition_and_post->left);
-            check_expression_type(&condition_and_post->right);
-            check_statement_types(node->right);
-            leave_scope();
+                check_expression_type(ctx, &parts->left);
+            check_expression_type(ctx, &condition_and_post->left);
+            check_expression_type(ctx, &condition_and_post->right);
+            check_statement_types(ctx, node->right);
+            leave_scope(ctx);
             break;
         default:
             break;
     }
 }
 
-static void check_top_level_types(struct ast_node *node)
+static void check_top_level_types(struct sema_ctx *ctx, struct ast_node *node)
 {
     struct ast_node *param;
 
     if (!node) return;
     if (node->type == AST_PROGRAM) {
-        check_top_level_types(node->left);
+        check_top_level_types(ctx, node->left);
     } else if (node->type == AST_FUNCTION_LIST) {
-        check_top_level_types(node->left);
-        check_top_level_types(node->right);
+        check_top_level_types(ctx, node->left);
+        check_top_level_types(ctx, node->right);
     } else if (node->type == AST_GLOBAL_DECL) {
         if (node->left) {
             if (node->array_length > 0) {
-                check_initializer_list_types(node);
+                check_initializer_list_types(ctx, node);
             } else if (node->left->type == AST_INITIALIZER_LIST) {
-                semantic_error_at(node->left, "initializer list is only valid for arrays");
+                semantic_error_at(ctx, node->left, "initializer list is only valid for arrays");
             } else {
-                check_expression_type(&node->left);
+                check_expression_type(ctx, &node->left);
                 insert_conversion(&node->left, node->data_type);
             }
         }
     } else if (node->type == AST_STRUCT_DEF) {
         return;
     } else if (node->type == AST_FUNCTION) {
-        current_return_type = node->data_type;
-        current_return_pointer_depth = node->pointer_depth;
-        local_count = 0;
-        scope_depth = 1;
+        ctx->current_return_type = node->data_type;
+        ctx->current_return_pointer_depth = node->pointer_depth;
+        ctx->local_count = 0;
+        ctx->scope_depth = 1;
         for (param = node->left; param; param = param->right)
-            add_local(param->left, param->left->data_type);
-        if (node->right) check_statement_types(node->right->left);
+            add_local(ctx, param->left, param->left->data_type);
+        if (node->right) check_statement_types(ctx, node->right->left);
     }
 }
 
 int semantic_analyze(struct ast_node *ast, const char *source_path)
 {
-    semantic_source_path = source_path;
-    global_count = 0;
-    local_count = 0;
-    struct_count = 0;
-    scope_depth = 0;
-    loop_depth = 0;
-    error_count = 0;
-    current_function = NULL;
+    struct sema_ctx ctx_storage;
+    struct sema_ctx *ctx = &ctx_storage;
+    int ok;
 
-    collect_top_level(ast);
-    analyze_top_level(ast);
-    if (error_count == 0) check_top_level_types(ast);
-    return error_count == 0;
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->source_path = source_path;
+
+    collect_top_level(ctx, ast);
+    analyze_top_level(ctx, ast);
+    if (ctx->error_count == 0) check_top_level_types(ctx, ast);
+
+    ok = ctx->error_count == 0;
+
+    /*
+     * The tables hold borrowed pointers into the AST, so only the arrays
+     * themselves are owned here.
+     */
+    free(ctx->globals);
+    free(ctx->locals);
+    free(ctx->structs);
+
+    return ok;
 }

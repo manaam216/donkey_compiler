@@ -44,12 +44,10 @@ struct ast_node* parse_arg_list(struct token *tokens, int *token_index);
 
 int semantic_analyze(struct ast_node *ast, const char *source_path);
 
-char* generate(struct ast_node *ast);
-void generate_function(struct ast_node *node, FILE *output);
-void generate_program(struct ast_node *node, FILE *output);
-void generate_statement(struct ast_node *node, FILE *output);
-void generate_exp(struct ast_node *node, FILE *output);
-int generate_call_args(struct ast_node *node, FILE *output);
+/*
+ * Code generation is driven entirely through write_assembly_to_file, which owns
+ * the emitter context. The per-node generators are internal to codegen.c.
+ */
 void write_assembly_to_file(const char *filename, struct ast_node *ast);
 
 #endif

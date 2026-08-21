@@ -25,20 +25,63 @@ static struct {
     int field_count;
     struct codegen_field fields[64];
 } structs[256];
-static struct {
-    char *value;
-    int label;
-} strings[256];
 static int symbol_count = 0;
 static int global_count = 0;
 static int struct_count = 0;
-static int string_count = 0;
 static int local_stack_count = 0;
-static int label_count = 0;
-static int current_function_end_label = 0;
-static int loop_break_labels[128];
-static int loop_continue_labels[128];
-static int loop_depth = 0;
+
+/*
+ * Emitter state: label numbering, the active function's exit label, the
+ * break/continue label stacks, and interned string literals. The symbol,
+ * struct, and global tables above stay file-scope for now -- they duplicate
+ * work semantic analysis already did and are slated for removal once codegen
+ * reads its symbols from the annotated AST instead.
+ */
+struct cg_string {
+    char *value;
+    int label;
+};
+
+struct cg_ctx {
+    int label_count;
+    int current_function_end_label;
+
+    int *loop_break_labels;
+    int *loop_continue_labels;
+    int loop_depth;
+    int loop_capacity;
+
+    struct cg_string *strings;
+    int string_count;
+    int string_capacity;
+};
+
+static void cg_grow(void **items, int count, int *capacity, size_t item_size)
+{
+    void *grown;
+    int next;
+
+    if (count < *capacity) {
+        return;
+    }
+
+    next = *capacity ? *capacity * 2 : 32;
+    grown = realloc(*items, (size_t)next * item_size);
+    if (!grown) {
+        fprintf(stderr, "Out of memory in the code generator\n");
+        exit(EXIT_FAILURE);
+    }
+
+    *items = grown;
+    *capacity = next;
+}
+
+/* Mutually recursive generators, previously declared in decl.h. */
+static void generate_program(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
+static void generate_function(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
+static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
+static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
+static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
 
 static int find_local(const char *name)
 {
@@ -290,7 +333,7 @@ static void generate_identifier_store(const char *name, FILE *output)
     exit(1);
 }
 
-static void generate_lvalue_address(struct ast_node *node, FILE *output)
+static void generate_lvalue_address(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
     int local_index;
 
@@ -308,22 +351,22 @@ static void generate_lvalue_address(struct ast_node *node, FILE *output)
             fprintf(stderr, "Use of undeclared identifier '%s'\n", node->value);
             exit(1);
         case AST_DEREFERENCE:
-            generate_exp(node->left, output);
+            generate_exp(ctx, node->left, output);
             return;
         case AST_ARRAY_SUBSCRIPT:
             if (node->left->array_length > 0) {
-                generate_lvalue_address(node->left, output);
+                generate_lvalue_address(ctx, node->left, output);
             } else {
-                generate_exp(node->left, output);
+                generate_exp(ctx, node->left, output);
             }
             fprintf(output, "    push    %%eax\n");
-            generate_exp(node->right, output);
+            generate_exp(ctx, node->right, output);
             fprintf(output, "    imull   $4, %%eax\n");
             fprintf(output, "    pop     %%edx\n");
             fprintf(output, "    addl    %%edx, %%eax\n");
             return;
         case AST_FIELD_ACCESS:
-            generate_lvalue_address(node->left, output);
+            generate_lvalue_address(ctx, node->left, output);
             fprintf(output, "    addl    $%d, %%eax\n",
                 struct_field_offset(node->left->struct_name, node->value));
             return;
@@ -333,22 +376,25 @@ static void generate_lvalue_address(struct ast_node *node, FILE *output)
     }
 }
 
-static void push_loop(int break_label, int continue_label)
+static void push_loop(struct cg_ctx *ctx, int break_label, int continue_label)
 {
-    if (loop_depth >= 128) {
-        fprintf(stderr, "Too many nested loops\n");
-        exit(1);
-    }
+    int capacity_before = ctx->loop_capacity;
 
-    loop_break_labels[loop_depth] = break_label;
-    loop_continue_labels[loop_depth] = continue_label;
-    loop_depth++;
+    cg_grow((void **)&ctx->loop_break_labels, ctx->loop_depth,
+        &ctx->loop_capacity, sizeof(*ctx->loop_break_labels));
+    /* Both stacks are kept the same size, so grow the second to match. */
+    cg_grow((void **)&ctx->loop_continue_labels, ctx->loop_depth,
+        &capacity_before, sizeof(*ctx->loop_continue_labels));
+
+    ctx->loop_break_labels[ctx->loop_depth] = break_label;
+    ctx->loop_continue_labels[ctx->loop_depth] = continue_label;
+    ctx->loop_depth++;
 }
 
-static void pop_loop(void)
+static void pop_loop(struct cg_ctx *ctx)
 {
-    if (loop_depth > 0) {
-        loop_depth--;
+    if (ctx->loop_depth > 0) {
+        ctx->loop_depth--;
     }
 }
 
@@ -506,25 +552,23 @@ static void collect_globals(struct ast_node *node)
     }
 }
 
-static int add_string_literal(const char *value)
+static int add_string_literal(struct cg_ctx *ctx, const char *value)
 {
-    for (int i = 0; i < string_count; i++) {
-        if (strcmp(strings[i].value, value) == 0) {
-            return strings[i].label;
+    for (int i = 0; i < ctx->string_count; i++) {
+        if (strcmp(ctx->strings[i].value, value) == 0) {
+            return ctx->strings[i].label;
         }
     }
-    if (string_count >= 256) {
-        fprintf(stderr, "Too many string literals\n");
-        exit(1);
-    }
+    cg_grow((void **)&ctx->strings, ctx->string_count, &ctx->string_capacity,
+        sizeof(*ctx->strings));
 
-    strings[string_count].value = strdup(value);
-    strings[string_count].label = string_count;
-    string_count++;
-    return string_count - 1;
+    ctx->strings[ctx->string_count].value = strdup(value);
+    ctx->strings[ctx->string_count].label = ctx->string_count;
+    ctx->string_count++;
+    return ctx->string_count - 1;
 }
 
-static void collect_metadata(struct ast_node *node)
+static void collect_metadata(struct cg_ctx *ctx, struct ast_node *node)
 {
     if (!node) return;
     if (node->type == AST_STRUCT_DEF) {
@@ -553,15 +597,15 @@ static void collect_metadata(struct ast_node *node)
         return;
     }
     if (node->type == AST_STRINGLIT) {
-        node->string_label = add_string_literal(node->value);
+        node->string_label = add_string_literal(ctx, node->value);
     }
-    collect_metadata(node->left);
-    collect_metadata(node->right);
+    collect_metadata(ctx, node->left);
+    collect_metadata(ctx, node->right);
 }
 
-static void generate_globals(FILE *output)
+static void generate_globals(struct cg_ctx *ctx, FILE *output)
 {
-    if (global_count == 0 && string_count == 0) {
+    if (global_count == 0 && ctx->string_count == 0) {
         return;
     }
 
@@ -574,10 +618,10 @@ static void generate_globals(FILE *output)
             fprintf(output, "    .long   %d\n", globals[i].values[j]);
         }
     }
-    for (int i = 0; i < string_count; i++) {
-        fprintf(output, ".LC%d:\n", strings[i].label);
+    for (int i = 0; i < ctx->string_count; i++) {
+        fprintf(output, ".LC%d:\n", ctx->strings[i].label);
         fprintf(output, "    .byte   ");
-        for (const unsigned char *p = (const unsigned char *)strings[i].value; *p; p++) {
+        for (const unsigned char *p = (const unsigned char *)ctx->strings[i].value; *p; p++) {
             fprintf(output, "%u, ", *p);
         }
         fprintf(output, "0\n");
@@ -585,11 +629,11 @@ static void generate_globals(FILE *output)
     fprintf(output, ".text\n");
 }
 
-void generate_function(struct ast_node *node, FILE *output)
+static void generate_function(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
     collect_params(node->left, 0);
     collect_locals(node->right);
-    current_function_end_label = label_count++;
+    ctx->current_function_end_label = ctx->label_count++;
 
     fprintf(output, ".globl _%s\n", node->value);
     fprintf(output, "_%s:\n", node->value);
@@ -598,14 +642,14 @@ void generate_function(struct ast_node *node, FILE *output)
     if (local_stack_count > 0) {
         fprintf(output, "    subl    $%d, %%esp\n", local_stack_count * 4);
     }
-    generate_statement(node->right, output);
+    generate_statement(ctx, node->right, output);
     fprintf(output, "    movl    $0, %%eax\n");
-    fprintf(output, ".L%d:\n", current_function_end_label);
+    fprintf(output, ".L%d:\n", ctx->current_function_end_label);
     generate_epilogue(output);
     free_locals();
 }
 
-void generate_program(struct ast_node *node, FILE *output)
+static void generate_program(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
     if (!node) {
         return;
@@ -613,17 +657,17 @@ void generate_program(struct ast_node *node, FILE *output)
 
     switch (node->type) {
         case AST_PROGRAM:
-            collect_metadata(node->left);
+            collect_metadata(ctx, node->left);
             collect_globals(node->left);
-            generate_globals(output);
-            generate_program(node->left, output);
+            generate_globals(ctx, output);
+            generate_program(ctx, node->left, output);
             break;
         case AST_FUNCTION_LIST:
-            generate_program(node->left, output);
-            generate_program(node->right, output);
+            generate_program(ctx, node->left, output);
+            generate_program(ctx, node->right, output);
             break;
         case AST_FUNCTION:
-            generate_function(node, output);
+            generate_function(ctx, node, output);
             break;
         case AST_GLOBAL_DECL:
             break;
@@ -635,7 +679,7 @@ void generate_program(struct ast_node *node, FILE *output)
     }
 }
 
-void generate_statement(struct ast_node *node, FILE *output)
+static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
     if (!node) {
         return;
@@ -643,11 +687,11 @@ void generate_statement(struct ast_node *node, FILE *output)
 
     switch (node->type) {
         case AST_BLOCK:
-            generate_statement(node->left, output);
+            generate_statement(ctx, node->left, output);
             break;
         case AST_STATEMENT_LIST:
-            generate_statement(node->left, output);
-            generate_statement(node->right, output);
+            generate_statement(ctx, node->left, output);
+            generate_statement(ctx, node->right, output);
             break;
         case AST_DECL:
             if (node->array_length > 0) {
@@ -656,7 +700,7 @@ void generate_statement(struct ast_node *node, FILE *output)
                 struct ast_node *item;
 
                 for (item = initializer_items(node->left); item; item = item->right) {
-                    generate_exp(item->left, output);
+                    generate_exp(ctx, item->left, output);
                     fprintf(output, "    movl    %%eax, %d(%%ebp)\n", offset + (index * 4));
                     index++;
                 }
@@ -665,96 +709,96 @@ void generate_statement(struct ast_node *node, FILE *output)
                     index++;
                 }
             } else if (node->left) {
-                generate_exp(node->left, output);
+                generate_exp(ctx, node->left, output);
                 fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->value));
             } else {
                 fprintf(output, "    movl    $0, %d(%%ebp)\n", local_offset(node->value));
             }
             break;
         case AST_EXPR_STMT:
-            generate_exp(node->left, output);
+            generate_exp(ctx, node->left, output);
             break;
         case AST_RETURN:
-            generate_exp(node->left, output);
-            fprintf(output, "    jmp     .L%d\n", current_function_end_label);
+            generate_exp(ctx, node->left, output);
+            fprintf(output, "    jmp     .L%d\n", ctx->current_function_end_label);
             break;
         case AST_IF: {
-            int else_label = label_count++;
-            int end_label = label_count++;
+            int else_label = ctx->label_count++;
+            int end_label = ctx->label_count++;
 
-            generate_exp(node->left, output);
+            generate_exp(ctx, node->left, output);
             fprintf(output, "    cmpl    $0, %%eax\n");
             fprintf(output, "    je      .L%d\n", else_label);
-            generate_statement(node->right->left, output);
+            generate_statement(ctx, node->right->left, output);
             fprintf(output, "    jmp     .L%d\n", end_label);
             fprintf(output, ".L%d:\n", else_label);
             if (node->right->right) {
-                generate_statement(node->right->right, output);
+                generate_statement(ctx, node->right->right, output);
             }
             fprintf(output, ".L%d:\n", end_label);
             break;
         }
         case AST_WHILE: {
-            int start_label = label_count++;
-            int end_label = label_count++;
+            int start_label = ctx->label_count++;
+            int end_label = ctx->label_count++;
 
-            push_loop(end_label, start_label);
+            push_loop(ctx, end_label, start_label);
             fprintf(output, ".L%d:\n", start_label);
-            generate_exp(node->left, output);
+            generate_exp(ctx, node->left, output);
             fprintf(output, "    cmpl    $0, %%eax\n");
             fprintf(output, "    je      .L%d\n", end_label);
-            generate_statement(node->right, output);
+            generate_statement(ctx, node->right, output);
             fprintf(output, "    jmp     .L%d\n", start_label);
             fprintf(output, ".L%d:\n", end_label);
-            pop_loop();
+            pop_loop(ctx);
             break;
         }
         case AST_FOR: {
             struct ast_node *init = node->left->left;
             struct ast_node *cond = node->left->right->left;
             struct ast_node *post = node->left->right->right;
-            int start_label = label_count++;
-            int post_label = label_count++;
-            int end_label = label_count++;
+            int start_label = ctx->label_count++;
+            int post_label = ctx->label_count++;
+            int end_label = ctx->label_count++;
 
             if (init) {
                 if (init->type == AST_DECL) {
-                    generate_statement(init, output);
+                    generate_statement(ctx, init, output);
                 } else {
-                    generate_exp(init, output);
+                    generate_exp(ctx, init, output);
                 }
             }
 
-            push_loop(end_label, post_label);
+            push_loop(ctx, end_label, post_label);
             fprintf(output, ".L%d:\n", start_label);
             if (cond) {
-                generate_exp(cond, output);
+                generate_exp(ctx, cond, output);
                 fprintf(output, "    cmpl    $0, %%eax\n");
                 fprintf(output, "    je      .L%d\n", end_label);
             }
-            generate_statement(node->right, output);
+            generate_statement(ctx, node->right, output);
             fprintf(output, ".L%d:\n", post_label);
             if (post) {
-                generate_exp(post, output);
+                generate_exp(ctx, post, output);
             }
             fprintf(output, "    jmp     .L%d\n", start_label);
             fprintf(output, ".L%d:\n", end_label);
-            pop_loop();
+            pop_loop(ctx);
             break;
         }
         case AST_BREAK:
-            if (loop_depth == 0) {
+            if (ctx->loop_depth == 0) {
                 fprintf(stderr, "break used outside of loop\n");
                 exit(1);
             }
-            fprintf(output, "    jmp     .L%d\n", loop_break_labels[loop_depth - 1]);
+            fprintf(output, "    jmp     .L%d\n", ctx->loop_break_labels[ctx->loop_depth - 1]);
             break;
         case AST_CONTINUE:
-            if (loop_depth == 0) {
+            if (ctx->loop_depth == 0) {
                 fprintf(stderr, "continue used outside of loop\n");
                 exit(1);
             }
-            fprintf(output, "    jmp     .L%d\n", loop_continue_labels[loop_depth - 1]);
+            fprintf(output, "    jmp     .L%d\n", ctx->loop_continue_labels[ctx->loop_depth - 1]);
             break;
         default:
             fprintf(stderr, "Unsupported statement node type: %d\n", node->type);
@@ -762,7 +806,7 @@ void generate_statement(struct ast_node *node, FILE *output)
     }
 }
 
-void generate_binop(struct ast_node *node, FILE *output)
+void generate_binop(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
     int is_unsigned = is_unsigned_type(node->left->data_type);
     int left_is_pointer = node->left->pointer_depth > 0 || node->left->array_length > 0;
@@ -770,9 +814,9 @@ void generate_binop(struct ast_node *node, FILE *output)
 
     if ((node->type == AST_ADD || node->type == AST_SUB) &&
         (left_is_pointer || right_is_pointer)) {
-        generate_exp(node->left, output);
+        generate_exp(ctx, node->left, output);
         fprintf(output, "    push    %%eax\n");
-        generate_exp(node->right, output);
+        generate_exp(ctx, node->right, output);
         fprintf(output, "    pop     %%edx\n");
 
         if (left_is_pointer && right_is_pointer && node->type == AST_SUB) {
@@ -800,10 +844,10 @@ void generate_binop(struct ast_node *node, FILE *output)
         }
     }
 
-    generate_exp(node->left, output);
+    generate_exp(ctx, node->left, output);
     fprintf(output, "    push    %%eax\n");
 
-    generate_exp(node->right, output);
+    generate_exp(ctx, node->right, output);
     fprintf(output, "    pop     %%edx\n");
 
     switch (node->type) {
@@ -897,7 +941,7 @@ void generate_binop(struct ast_node *node, FILE *output)
     }
 }
 
-void generate_exp(struct ast_node *node, FILE *output)
+static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
     switch (node->type) {
         case AST_INTLIT:
@@ -910,7 +954,7 @@ void generate_exp(struct ast_node *node, FILE *output)
             generate_identifier_load(node->value, output);
             break;
         case AST_CALL: {
-            int arg_count = generate_call_args(node->left, output);
+            int arg_count = generate_call_args(ctx, node->left, output);
             fprintf(output, "    call    _%s\n", node->value);
             if (arg_count > 0) {
                 fprintf(output, "    addl    $%d, %%esp\n", arg_count * 4);
@@ -933,34 +977,34 @@ void generate_exp(struct ast_node *node, FILE *output)
         case AST_LESS_EQUAL:
         case AST_GREATER:
         case AST_GREATER_EQUAL:
-            generate_binop(node, output);
+            generate_binop(ctx, node, output);
             break;
         case AST_CONDITIONAL: {
-            int else_label = label_count++;
-            int end_label = label_count++;
+            int else_label = ctx->label_count++;
+            int end_label = ctx->label_count++;
 
-            generate_exp(node->left, output);
+            generate_exp(ctx, node->left, output);
             fprintf(output, "    cmpl    $0, %%eax\n");
             fprintf(output, "    je      .L%d\n", else_label);
-            generate_exp(node->right->left, output);
+            generate_exp(ctx, node->right->left, output);
             fprintf(output, "    jmp     .L%d\n", end_label);
             fprintf(output, ".L%d:\n", else_label);
-            generate_exp(node->right->right, output);
+            generate_exp(ctx, node->right->right, output);
             fprintf(output, ".L%d:\n", end_label);
             break;
         }
         case AST_COMMA:
-            generate_exp(node->left, output);
-            generate_exp(node->right, output);
+            generate_exp(ctx, node->left, output);
+            generate_exp(ctx, node->right, output);
             break;
         case AST_LOGICAL_AND: {
-            int false_label = label_count++;
-            int end_label = label_count++;
+            int false_label = ctx->label_count++;
+            int end_label = ctx->label_count++;
 
-            generate_exp(node->left, output);
+            generate_exp(ctx, node->left, output);
             fprintf(output, "    cmpl    $0, %%eax\n");
             fprintf(output, "    je      .L%d\n", false_label);
-            generate_exp(node->right, output);
+            generate_exp(ctx, node->right, output);
             fprintf(output, "    cmpl    $0, %%eax\n");
             fprintf(output, "    je      .L%d\n", false_label);
             fprintf(output, "    movl    $1, %%eax\n");
@@ -971,13 +1015,13 @@ void generate_exp(struct ast_node *node, FILE *output)
             break;
         }
         case AST_LOGICAL_OR: {
-            int true_label = label_count++;
-            int end_label = label_count++;
+            int true_label = ctx->label_count++;
+            int end_label = ctx->label_count++;
 
-            generate_exp(node->left, output);
+            generate_exp(ctx, node->left, output);
             fprintf(output, "    cmpl    $0, %%eax\n");
             fprintf(output, "    jne     .L%d\n", true_label);
-            generate_exp(node->right, output);
+            generate_exp(ctx, node->right, output);
             fprintf(output, "    cmpl    $0, %%eax\n");
             fprintf(output, "    jne     .L%d\n", true_label);
             fprintf(output, "    movl    $0, %%eax\n");
@@ -988,26 +1032,26 @@ void generate_exp(struct ast_node *node, FILE *output)
             break;
         }
         case AST_ASSIGN:
-            generate_exp(node->right, output);
+            generate_exp(ctx, node->right, output);
             fprintf(output, "    push    %%eax\n");
-            generate_lvalue_address(node->left, output);
+            generate_lvalue_address(ctx, node->left, output);
             fprintf(output, "    pop     %%edx\n");
             fprintf(output, "    movl    %%edx, (%%eax)\n");
             fprintf(output, "    movl    %%edx, %%eax\n");
             break;
         case AST_ADDRESS_OF:
-            generate_lvalue_address(node->left, output);
+            generate_lvalue_address(ctx, node->left, output);
             break;
         case AST_DEREFERENCE:
-            generate_exp(node->left, output);
+            generate_exp(ctx, node->left, output);
             fprintf(output, "    movl    (%%eax), %%eax\n");
             break;
         case AST_ARRAY_SUBSCRIPT:
-            generate_lvalue_address(node, output);
+            generate_lvalue_address(ctx, node, output);
             fprintf(output, "    movl    (%%eax), %%eax\n");
             break;
         case AST_FIELD_ACCESS:
-            generate_lvalue_address(node, output);
+            generate_lvalue_address(ctx, node, output);
             fprintf(output, "    movl    (%%eax), %%eax\n");
             break;
         case AST_PRE_INCREMENT:
@@ -1042,19 +1086,19 @@ void generate_exp(struct ast_node *node, FILE *output)
             fprintf(output, "    movl    $%d, %%eax\n", type_size(node->value));
             break;
         case AST_CAST:
-            generate_exp(node->left, output);
+            generate_exp(ctx, node->left, output);
             generate_cast(node->value, output);
             break;
         case AST_NEGATION:
-            generate_exp(node->left, output);
+            generate_exp(ctx, node->left, output);
             fprintf(output, "    negl    %%eax\n");
             break;
         case AST_BITWISE_COMPLEMENT:
-            generate_exp(node->left, output);
+            generate_exp(ctx, node->left, output);
             fprintf(output, "    notl    %%eax\n");
             break;
         case AST_LOGICAL_NEGATION:
-            generate_exp(node->left, output);
+            generate_exp(ctx, node->left, output);
             fprintf(output, "    cmpl    $0, %%eax\n");
             fprintf(output, "    movl    $0, %%eax\n");
             fprintf(output, "    sete    %%al\n");
@@ -1065,7 +1109,7 @@ void generate_exp(struct ast_node *node, FILE *output)
     }
 }
 
-int generate_call_args(struct ast_node *node, FILE *output)
+static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
     if (!node) {
         return 0;
@@ -1076,40 +1120,13 @@ int generate_call_args(struct ast_node *node, FILE *output)
         exit(1);
     }
 
-    int count = generate_call_args(node->right, output);
-    generate_exp(node->left, output);
+    int count = generate_call_args(ctx, node->right, output);
+    generate_exp(ctx, node->left, output);
     fprintf(output, "    push    %%eax\n");
 
     return count + 1;
 }
 
-char* generate(struct ast_node *ast)
-{
-    FILE *output = fopen("donkey_generate.tmp", "w+");
-    if (output == NULL) {
-        perror("Failed to create temporary file for assembly generation");
-        exit(EXIT_FAILURE);
-    }
-
-    generate_program(ast, output);
-    rewind(output);
-    fseek(output, 0, SEEK_END);
-    long size = ftell(output);
-    rewind(output);
-
-    char *assembly = malloc(size + 1);
-    if (assembly == NULL) {
-        perror("Failed to allocate memory for assembly string");
-        exit(EXIT_FAILURE);
-    }
-
-    fread(assembly, 1, size, output);
-    assembly[size] = '\0';
-
-    fclose(output);
-    remove("donkey_generate.tmp");
-    return assembly;
-}
 
 void write_assembly_to_file(const char *filename, struct ast_node *ast)
 {
@@ -1119,6 +1136,18 @@ void write_assembly_to_file(const char *filename, struct ast_node *ast)
         exit(EXIT_FAILURE);
     }
 
-    generate_program(ast, out_file);
+    struct cg_ctx ctx_storage;
+    struct cg_ctx *ctx = &ctx_storage;
+
+    memset(ctx, 0, sizeof(*ctx));
+
+    generate_program(ctx, ast, out_file);
     fclose(out_file);
+
+    for (int i = 0; i < ctx->string_count; i++) {
+        free(ctx->strings[i].value);
+    }
+    free(ctx->strings);
+    free(ctx->loop_break_labels);
+    free(ctx->loop_continue_labels);
 }
