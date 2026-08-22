@@ -41,6 +41,9 @@ examples/pointer_arithmetic.c pointer_arithmetic
 examples/global_arrays.c global_arrays
 examples/advanced_types.c advanced_types
 examples/wide_values.c wide_values
+examples/char_arrays.c char_arrays
+examples/struct_layout.c struct_layout
+examples/struct_arrays.c struct_arrays
 tests/semantic/valid_forward_call.c valid_forward_call
 "
 
@@ -53,9 +56,14 @@ cflags="${CFLAGS:--Wall -Wextra -g}"
 
 # shellcheck disable=SC2086 # cflags is a deliberate word-split flag list
 "$cc" -Iinclude $cflags -o "$compiler" \
-    src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c
+    src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c src/type.c
 
 failures=0
+
+echo "== unit tests =="
+# shellcheck disable=SC2086
+"$cc" -Iinclude $cflags -o "$build_dir/test_type" tests/unit/test_type.c src/type.c
+"$build_dir/test_type"
 
 fail() {
     echo "FAIL: $*" >&2

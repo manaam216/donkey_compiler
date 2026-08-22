@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include "defs.h"
 #include "decl.h"
+#include "type.h"
 
 int main(int argc, char *argv[])
 {
@@ -29,6 +30,7 @@ int main(int argc, char *argv[])
     if (!semantic_analyze(ast, argv[1])) {
         free_ast_node(ast);
         free_tokens(tokens, token_count);
+        ty_cleanup();
         fclose(infile);
         return EXIT_FAILURE;
     }
@@ -38,6 +40,7 @@ int main(int argc, char *argv[])
 
     free_ast_node(ast);
     free_tokens(tokens, token_count);
+    ty_cleanup();
     fclose(infile);
 
     return EXIT_SUCCESS;

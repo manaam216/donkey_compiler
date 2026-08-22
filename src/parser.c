@@ -708,8 +708,13 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
             }
         }
 
-        parse_factor(tokens, token_index);
-        struct ast_node *size = create_ast_node_at(AST_SIZEOF, "int", NULL, NULL, sizeof_location);
+        /*
+         * Keep the operand: its resolved type is what determines the size.
+         * It is never evaluated, only measured.
+         */
+        struct ast_node *operand = parse_factor(tokens, token_index);
+        struct ast_node *size = create_ast_node_at(AST_SIZEOF, NULL, operand, NULL,
+            sizeof_location);
         size->data_type = TYPE_UINT;
         return size;
     } else if (tok->type == T_MINUS) {

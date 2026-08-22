@@ -4,6 +4,7 @@
 #include <string.h>
 #include "defs.h"
 #include "decl.h"
+#include "type.h"
 
 struct global_symbol {
     const char *name;
@@ -37,6 +38,7 @@ struct struct_symbol {
     const char *name;
     int field_count;
     struct struct_field fields[64];
+    struct Type *ty;            /* resolved layout: offsets, size, alignment */
 };
 
 /*
@@ -169,9 +171,42 @@ static int find_struct_field(struct sema_ctx *ctx, int struct_index, const char 
     return -1;
 }
 
+/*
+ * Turn the parser's syntactic record (base type name, pointer stars, array
+ * length, struct tag) into a resolved type. Structs must already be collected,
+ * which collect_top_level guarantees by visiting definitions first.
+ */
+static struct Type *base_type_for(struct sema_ctx *ctx, struct ast_node *node)
+{
+    if (node->struct_name) {
+        int index = find_struct(ctx, node->struct_name);
+        if (index >= 0 && ctx->structs[index].ty) {
+            return ctx->structs[index].ty;
+        }
+        return ty_int;
+    }
+    return ty_from_name(semantic_type_name(node->data_type));
+}
+
+static struct Type *resolve_type(struct sema_ctx *ctx, struct ast_node *node)
+{
+    struct Type *type = base_type_for(ctx, node);
+    int i;
+
+    for (i = 0; i < node->pointer_depth; i++) {
+        type = ty_pointer_to(type);
+    }
+    if (node->array_length > 0) {
+        type = ty_array_of(type, node->array_length);
+    }
+    return type;
+}
+
 static void add_struct(struct sema_ctx *ctx, struct ast_node *node)
 {
     struct ast_node *field;
+    struct Type *struct_type;
+    int index;
 
     if (find_struct(ctx, node->value) >= 0) {
         semantic_error_at(ctx, node, "duplicate struct definition '%s'", node->value);
@@ -179,12 +214,15 @@ static void add_struct(struct sema_ctx *ctx, struct ast_node *node)
     }
     ensure_capacity((void **)&ctx->structs, ctx->struct_count,
         &ctx->struct_capacity, sizeof(*ctx->structs));
+    struct_type = ty_struct(node->value);
+    node->ty = struct_type;
     ctx->structs[ctx->struct_count].name = node->value;
     ctx->structs[ctx->struct_count].field_count = 0;
+    ctx->structs[ctx->struct_count].ty = struct_type;
     for (field = node->left; field; field = field->right) {
         struct ast_node *decl = field->left;
         int existing = find_struct_field(ctx, ctx->struct_count, decl->value);
-        int index = ctx->structs[ctx->struct_count].field_count;
+        index = ctx->structs[ctx->struct_count].field_count;
         if (existing >= 0) {
             semantic_error_at(ctx, decl, "duplicate field '%s'", decl->value);
             continue;
@@ -196,9 +234,18 @@ static void add_struct(struct sema_ctx *ctx, struct ast_node *node)
         ctx->structs[ctx->struct_count].fields[index].name = decl->value;
         ctx->structs[ctx->struct_count].fields[index].type = decl->data_type;
         ctx->structs[ctx->struct_count].fields[index].pointer_depth = decl->pointer_depth;
-        ctx->structs[ctx->struct_count].fields[index].offset = index * 4;
         ctx->structs[ctx->struct_count].field_count++;
+        ty_add_member(struct_type, decl->value, resolve_type(ctx, decl));
     }
+
+    /* Real offsets, padding, size, and alignment -- not field_index * 4. */
+    ty_layout_struct(struct_type);
+    for (index = 0; index < ctx->structs[ctx->struct_count].field_count; index++) {
+        struct Member *member = ty_find_member(struct_type,
+            ctx->structs[ctx->struct_count].fields[index].name);
+        ctx->structs[ctx->struct_count].fields[index].offset = member ? member->offset : 0;
+    }
+
     ctx->struct_count++;
 }
 
@@ -303,6 +350,7 @@ static void add_global(struct sema_ctx *ctx, struct ast_node *node)
         return;
     }
 
+    node->ty = resolve_type(ctx, node);
     ctx->globals[ctx->global_count].name = name;
     ctx->globals[ctx->global_count].is_function = is_function;
     ctx->globals[ctx->global_count].type = node->data_type;
@@ -316,6 +364,7 @@ static void add_global(struct sema_ctx *ctx, struct ast_node *node)
                 semantic_error_at(ctx, node, "function '%s' has too many parameters", name);
                 break;
             }
+            param->left->ty = resolve_type(ctx, param->left);
             ctx->globals[ctx->global_count].parameter_types[ctx->globals[ctx->global_count].parameter_count++] =
                 param->left->data_type;
             ctx->globals[ctx->global_count].parameter_pointer_depths[ctx->globals[ctx->global_count].parameter_count - 1] =
@@ -345,6 +394,7 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
         return;
     }
 
+    node->ty = resolve_type(ctx, node);
     ctx->locals[ctx->local_count].name = name;
     ctx->locals[ctx->local_count].type = type;
     ctx->locals[ctx->local_count].pointer_depth = node->pointer_depth;
@@ -659,6 +709,7 @@ static void insert_conversion(struct ast_node **slot, CType target)
 }
 
 static CType check_expression_type(struct sema_ctx *ctx, struct ast_node **slot);
+static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node **slot);
 static void check_initializer_list_types(struct sema_ctx *ctx, struct ast_node *declaration);
 
 static CType check_binary_type(struct sema_ctx *ctx, struct ast_node *node)
@@ -730,7 +781,7 @@ static CType check_binary_type(struct sema_ctx *ctx, struct ast_node *node)
     return node->data_type = common;
 }
 
-static CType check_expression_type(struct sema_ctx *ctx, struct ast_node **slot)
+static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node **slot)
 {
     struct ast_node *node;
     struct ast_node *argument;
@@ -753,6 +804,10 @@ static CType check_expression_type(struct sema_ctx *ctx, struct ast_node **slot)
             node->pointer_depth = 1;
             return node->data_type = TYPE_CHAR;
         case AST_SIZEOF:
+            /* Type the operand so its size is known; it is never evaluated. */
+            if (node->left) {
+                check_expression_type(ctx, &node->left);
+            }
             return node->data_type = TYPE_UINT;
         case AST_INITIALIZER_LIST:
             semantic_error_at(ctx, node, "initializer list is not valid in this expression");
@@ -860,6 +915,12 @@ static CType check_expression_type(struct sema_ctx *ctx, struct ast_node **slot)
             node->pointer_depth = node->left->array_length > 0 ?
                 node->left->pointer_depth : node->left->pointer_depth - 1;
             node->array_length = 0;
+            /*
+             * Carry the struct tag through the subscript, so an element of a
+             * struct array is still a struct and its fields stay accessible.
+             */
+            node->struct_name = node->left->struct_name ?
+                strdup(node->left->struct_name) : NULL;
             return node->data_type;
         case AST_CAST:
             check_expression_type(ctx, &node->left);
@@ -916,6 +977,21 @@ static CType check_expression_type(struct sema_ctx *ctx, struct ast_node **slot)
         default:
             return check_binary_type(ctx, node);
     }
+}
+
+/*
+ * Every expression node carries a resolved type, derived from the fields the
+ * checker above computes. The code generator reads these for element sizes and
+ * struct offsets instead of assuming 4 bytes.
+ */
+static CType check_expression_type(struct sema_ctx *ctx, struct ast_node **slot)
+{
+    CType result = check_expression_type_inner(ctx, slot);
+
+    if (slot && *slot) {
+        (*slot)->ty = resolve_type(ctx, *slot);
+    }
+    return result;
 }
 
 static void check_initializer_list_types(struct sema_ctx *ctx, struct ast_node *declaration)

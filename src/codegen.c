@@ -4,30 +4,23 @@
 #include <string.h>
 #include "defs.h"
 #include "decl.h"
+#include "type.h"
 
 static struct {
     char *name;
     int offset;
     int array_length;
     char *struct_name;
+    struct Type *ty;
 } symbols[256];
 static struct {
     char *name;
     int array_length;
+    struct Type *ty;
     int values[256];
 } globals[256];
-struct codegen_field {
-    char *name;
-    int offset;
-};
-static struct {
-    char *name;
-    int field_count;
-    struct codegen_field fields[64];
-} structs[256];
 static int symbol_count = 0;
 static int global_count = 0;
-static int struct_count = 0;
 static int local_stack_count = 0;
 
 /*
@@ -116,7 +109,7 @@ static int find_global(const char *name)
     return -1;
 }
 
-static void add_symbol(const char *name, int offset)
+static void add_symbol(const char *name, int offset, struct Type *ty)
 {
     if (!name) {
         return;
@@ -136,36 +129,14 @@ static void add_symbol(const char *name, int offset)
     symbols[symbol_count].offset = offset;
     symbols[symbol_count].array_length = 0;
     symbols[symbol_count].struct_name = NULL;
+    symbols[symbol_count].ty = ty;
     symbol_count++;
 }
 
-static int find_struct(const char *name)
+static int struct_field_offset(struct Type *ty, const char *field_name)
 {
-    for (int i = 0; i < struct_count; i++) {
-        if (strcmp(structs[i].name, name) == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-static int struct_size(const char *name)
-{
-    int index = find_struct(name);
-    if (index < 0) return 4;
-    return structs[index].field_count * 4;
-}
-
-static int struct_field_offset(const char *struct_name, const char *field_name)
-{
-    int index = find_struct(struct_name);
-    if (index < 0) return 0;
-    for (int i = 0; i < structs[index].field_count; i++) {
-        if (strcmp(structs[index].fields[i].name, field_name) == 0) {
-            return structs[index].fields[i].offset;
-        }
-    }
-    return 0;
+    struct Member *member = ty_find_member(ty, field_name);
+    return member ? member->offset : 0;
 }
 
 static int eval_const_exp(struct ast_node *node);
@@ -222,21 +193,23 @@ static void add_global_node(struct ast_node *node)
     global_count++;
 }
 
-static void add_param(const char *name, int index)
+static void add_param(struct ast_node *node, int index)
 {
-    add_symbol(name, 8 + (index * 4));
+    add_symbol(node->value, 8 + (index * 4), node->ty);
 }
 
 static void add_local_node(struct ast_node *node)
 {
-    int slots = node->array_length > 0 ? node->array_length : 1;
+    /* Stack slots stay 4 bytes wide; round the type's size up to fill them. */
+    int size = node->ty ? node->ty->size : 4;
+    int slots = (size + 3) / 4;
 
-    if (node->struct_name && node->pointer_depth == 0 && node->array_length == 0) {
-        slots = struct_size(node->struct_name) / 4;
+    if (slots < 1) {
+        slots = 1;
     }
 
     local_stack_count += slots;
-    add_symbol(node->value, -4 * local_stack_count);
+    add_symbol(node->value, -4 * local_stack_count, node->ty);
     symbols[symbol_count - 1].array_length = node->array_length;
     symbols[symbol_count - 1].struct_name = node->struct_name ? strdup(node->struct_name) : NULL;
 }
@@ -252,7 +225,7 @@ static int collect_params(struct ast_node *node, int index)
         exit(1);
     }
 
-    add_param(node->left->value, index);
+    add_param(node->left, index);
     return collect_params(node->right, index + 1);
 }
 
@@ -282,6 +255,68 @@ static void free_locals(void)
     }
     symbol_count = 0;
     local_stack_count = 0;
+}
+
+/*
+ * Indirect access must match the element width. Using a 4-byte movl for a
+ * char element would read past it and, on a store, clobber the three
+ * neighbouring elements -- harmless while every type occupied its own 4-byte
+ * slot, but wrong now that arrays are packed at their true element size.
+ */
+static void emit_load_indirect(struct Type *ty, FILE *output)
+{
+    int size = ty ? ty->size : 4;
+
+    if (size == 1) {
+        fprintf(output, "    %s  (%%eax), %%eax\n",
+            ty && ty->is_unsigned ? "movzbl" : "movsbl");
+    } else if (size == 2) {
+        fprintf(output, "    %s  (%%eax), %%eax\n",
+            ty && ty->is_unsigned ? "movzwl" : "movswl");
+    } else {
+        fprintf(output, "    movl    (%%eax), %%eax\n");
+    }
+}
+
+/* Store %eax into a frame slot at the given offset, using the type's width. */
+static void emit_store_offset(struct Type *ty, int offset, FILE *output)
+{
+    int size = ty ? ty->size : 4;
+
+    if (size == 1) {
+        fprintf(output, "    movb    %%al, %d(%%ebp)\n", offset);
+    } else if (size == 2) {
+        fprintf(output, "    movw    %%ax, %d(%%ebp)\n", offset);
+    } else {
+        fprintf(output, "    movl    %%eax, %d(%%ebp)\n", offset);
+    }
+}
+
+static void emit_zero_offset(struct Type *ty, int offset, FILE *output)
+{
+    int size = ty ? ty->size : 4;
+
+    if (size == 1) {
+        fprintf(output, "    movb    $0, %d(%%ebp)\n", offset);
+    } else if (size == 2) {
+        fprintf(output, "    movw    $0, %d(%%ebp)\n", offset);
+    } else {
+        fprintf(output, "    movl    $0, %d(%%ebp)\n", offset);
+    }
+}
+
+/* Address in %eax, value in %edx. */
+static void emit_store_indirect(struct Type *ty, FILE *output)
+{
+    int size = ty ? ty->size : 4;
+
+    if (size == 1) {
+        fprintf(output, "    movb    %%dl, (%%eax)\n");
+    } else if (size == 2) {
+        fprintf(output, "    movw    %%dx, (%%eax)\n");
+    } else {
+        fprintf(output, "    movl    %%edx, (%%eax)\n");
+    }
 }
 
 static void generate_epilogue(FILE *output)
@@ -361,14 +396,15 @@ static void generate_lvalue_address(struct cg_ctx *ctx, struct ast_node *node, F
             }
             fprintf(output, "    push    %%eax\n");
             generate_exp(ctx, node->right, output);
-            fprintf(output, "    imull   $4, %%eax\n");
+            fprintf(output, "    imull   $%d, %%eax\n",
+                ty_element_size(node->left->ty));
             fprintf(output, "    pop     %%edx\n");
             fprintf(output, "    addl    %%edx, %%eax\n");
             return;
         case AST_FIELD_ACCESS:
             generate_lvalue_address(ctx, node->left, output);
             fprintf(output, "    addl    $%d, %%eax\n",
-                struct_field_offset(node->left->struct_name, node->value));
+                struct_field_offset(node->left->ty, node->value));
             return;
         default:
             fprintf(stderr, "Expression is not assignable\n");
@@ -398,16 +434,18 @@ static void pop_loop(struct cg_ctx *ctx)
     }
 }
 
-static int type_size(const char *type)
+/*
+ * sizeof yields the operand's real size: sizeof(char[10]) is 10, not 4 and not
+ * 40. A named type measures that type; an expression measures its resolved
+ * type without being evaluated.
+ */
+static int sizeof_node(struct ast_node *node)
 {
-    if (!type) {
-        return 4;
+    if (node->left && node->left->ty) {
+        return node->left->ty->size;
     }
-    if (strcmp(type, "char") == 0 || strcmp(type, "uchar") == 0) {
-        return 1;
-    }
-    if (strcmp(type, "short") == 0 || strcmp(type, "ushort") == 0) {
-        return 2;
+    if (node->value) {
+        return ty_from_name(node->value)->size;
     }
     return 4;
 }
@@ -529,7 +567,7 @@ static int eval_const_exp(struct ast_node *node)
         case AST_COMMA:
             return eval_const_exp(node->right);
         case AST_SIZEOF:
-            return type_size(node->value);
+            return sizeof_node(node);
         case AST_CAST:
             return cast_constant(eval_const_exp(node->left), node->value);
         default:
@@ -571,29 +609,11 @@ static int add_string_literal(struct cg_ctx *ctx, const char *value)
 static void collect_metadata(struct cg_ctx *ctx, struct ast_node *node)
 {
     if (!node) return;
+    /*
+     * Struct definitions need no metadata here: field offsets, size, and
+     * alignment come from the type semantic analysis attached to each node.
+     */
     if (node->type == AST_STRUCT_DEF) {
-        int index;
-
-        if (struct_count >= 256) {
-            fprintf(stderr, "Too many struct definitions\n");
-            exit(1);
-        }
-
-        index = struct_count++;
-        structs[index].name = strdup(node->value);
-        structs[index].field_count = 0;
-        for (struct ast_node *field = node->left; field; field = field->right) {
-            int field_index;
-
-            if (structs[index].field_count >= 64) {
-                fprintf(stderr, "Too many fields in struct '%s'\n", node->value);
-                exit(1);
-            }
-
-            field_index = structs[index].field_count++;
-            structs[index].fields[field_index].name = strdup(field->left->value);
-            structs[index].fields[field_index].offset = field_index * 4;
-        }
         return;
     }
     if (node->type == AST_STRINGLIT) {
@@ -696,16 +716,24 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
         case AST_DECL:
             if (node->array_length > 0) {
                 int offset = local_offset(node->value);
+                /*
+                 * Step by the element's real size. Striding by 4 through a
+                 * char array would run past its end -- straight over the saved
+                 * frame pointer and return address.
+                 */
+                int stride = ty_element_size(node->ty);
                 int index = 0;
                 struct ast_node *item;
 
                 for (item = initializer_items(node->left); item; item = item->right) {
                     generate_exp(ctx, item->left, output);
-                    fprintf(output, "    movl    %%eax, %d(%%ebp)\n", offset + (index * 4));
+                    emit_store_offset(node->ty ? node->ty->base : NULL,
+                        offset + (index * stride), output);
                     index++;
                 }
                 while (index < node->array_length) {
-                    fprintf(output, "    movl    $0, %d(%%ebp)\n", offset + (index * 4));
+                    emit_zero_offset(node->ty ? node->ty->base : NULL,
+                        offset + (index * stride), output);
                     index++;
                 }
             } else if (node->left) {
@@ -823,12 +851,14 @@ void generate_binop(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
             fprintf(output, "    subl    %%eax, %%edx\n");
             fprintf(output, "    movl    %%edx, %%eax\n");
             fprintf(output, "    cdq\n");
-            fprintf(output, "    movl    $4, %%ecx\n");
+            fprintf(output, "    movl    $%d, %%ecx\n",
+                ty_element_size(node->left->ty));
             fprintf(output, "    idivl   %%ecx\n");
             return;
         }
         if (left_is_pointer && !right_is_pointer) {
-            fprintf(output, "    imull   $4, %%eax\n");
+            fprintf(output, "    imull   $%d, %%eax\n",
+                ty_element_size(node->left->ty));
             if (node->type == AST_ADD) {
                 fprintf(output, "    addl    %%edx, %%eax\n");
             } else {
@@ -838,7 +868,8 @@ void generate_binop(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
             return;
         }
         if (right_is_pointer && !left_is_pointer && node->type == AST_ADD) {
-            fprintf(output, "    imull   $4, %%edx\n");
+            fprintf(output, "    imull   $%d, %%edx\n",
+                ty_element_size(node->right->ty));
             fprintf(output, "    addl    %%edx, %%eax\n");
             return;
         }
@@ -1036,7 +1067,7 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             fprintf(output, "    push    %%eax\n");
             generate_lvalue_address(ctx, node->left, output);
             fprintf(output, "    pop     %%edx\n");
-            fprintf(output, "    movl    %%edx, (%%eax)\n");
+            emit_store_indirect(node->left->ty, output);
             fprintf(output, "    movl    %%edx, %%eax\n");
             break;
         case AST_ADDRESS_OF:
@@ -1044,15 +1075,15 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             break;
         case AST_DEREFERENCE:
             generate_exp(ctx, node->left, output);
-            fprintf(output, "    movl    (%%eax), %%eax\n");
+            emit_load_indirect(node->ty, output);
             break;
         case AST_ARRAY_SUBSCRIPT:
             generate_lvalue_address(ctx, node, output);
-            fprintf(output, "    movl    (%%eax), %%eax\n");
+            emit_load_indirect(node->ty, output);
             break;
         case AST_FIELD_ACCESS:
             generate_lvalue_address(ctx, node, output);
-            fprintf(output, "    movl    (%%eax), %%eax\n");
+            emit_load_indirect(node->ty, output);
             break;
         case AST_PRE_INCREMENT:
             generate_identifier_load(node->left->value, output);
@@ -1083,7 +1114,7 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             fprintf(output, "    pop     %%eax\n");
             break;
         case AST_SIZEOF:
-            fprintf(output, "    movl    $%d, %%eax\n", type_size(node->value));
+            fprintf(output, "    movl    $%d, %%eax\n", sizeof_node(node));
             break;
         case AST_CAST:
             generate_exp(ctx, node->left, output);

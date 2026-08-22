@@ -10,12 +10,14 @@ integer-returning functions.
 .
 |-- include/          Public compiler headers
 |   |-- decl.h
-|   `-- defs.h
+|   |-- defs.h
+|   `-- type.h
 |-- src/              Compiler implementation
 |   |-- main.c        CLI entry point
 |   |-- lexer.c       Tokenizer
 |   |-- parser.c      Recursive descent parser and AST allocation
-|   |-- semantic.c    Name, scope, and function-call validation
+|   |-- semantic.c    Name, scope, type, and function-call validation
+|   |-- type.c        Type representation, sizes, and struct layout
 |   `-- codegen.c     Assembly generator
 |-- examples/         Source examples and reference assembly
 |   |-- sample.c
@@ -33,6 +35,7 @@ integer-returning functions.
 |   `-- unary.c
 |-- tests/            Test inputs and expectations
 |   |-- harness.c     Prints a compiled program's result (see Test)
+|   |-- unit/         Unit tests for compiler internals
 |   |-- golden/       Reference assembly for every example
 |   |-- expected/     Reference program output for every example
 |   |-- syntax/       Inputs that must fail to parse
@@ -63,7 +66,7 @@ On Windows with MinGW GCC and no `make`, run:
 
 ```powershell
 New-Item -ItemType Directory -Force build
-gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\lexer.c src\parser.c src\codegen.c
+gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\lexer.c src\parser.c src\semantic.c src\type.c src\codegen.c
 ```
 
 ## Test
@@ -201,7 +204,10 @@ Supported expression features:
   `'\''`, and `'\\'`
 - String literals with static storage, usable as `char *`
 - Limited structs with integer/pointer fields, stack/global variables, field
-  read/write via `value.field`
+  read/write via `value.field`, and arrays of structs such as `struct P pts[3]`
+  with `pts[i].field` access
+- Arrays of any supported element type, packed at the element's real size:
+  `char letters[4]` occupies 4 bytes and indexes by 1
 - Multiple statements inside a function body
 - Multiple integer-returning functions per input file
 - Function parameters: `int helper(int x, int y)`
@@ -216,8 +222,9 @@ Supported expression features:
 - Compound assignments: `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
 - Ternary conditional: `condition ? then_expr : else_expr`
 - Comma expressions: `a, b`
-- `sizeof` for common integer type names: `char`, `short`, `int`, `long`,
-  plus signed and unsigned variants
+- `sizeof` for type names and for expressions, yielding the operand's real
+  size: `sizeof(int)` is 4, `sizeof(buf)` for `char buf[10]` is 10, and
+  `sizeof` a struct includes its padding
 - Casts for common integer type names: `(char)x`, `(unsigned char)x`,
   `(short)x`, `(unsigned short)x`, `(int)x`, `(long)x`, and signed/unsigned
   int/long variants
@@ -237,14 +244,20 @@ column of the offending token:
 Semantic error at examples/bad.c:3:12 in function 'main': use of undeclared variable 'missing'
 ```
 
+Types are represented by a `Type` tree (`include/type.h`) that knows its own
+size and alignment. Semantic analysis resolves each declaration and expression
+to a type, and the code generator reads those types for storage sizes, struct
+field offsets, array strides, pointer arithmetic scaling, and `sizeof`.
+
 Expressions use C-style integer promotions and usual arithmetic conversions.
 Assignments, arguments, and return values are converted to their destination
 types; unsigned division, comparisons, and right shifts use unsigned machine
-operations. All current integer types occupy four-byte storage slots, while
-`char` and `short` values are narrowed and sign- or zero-extended as required.
-Pointer assignments are type checked, and array indexing currently uses
-four-byte elements. Pointer arithmetic is scaled by four-byte elements for the
-current integer-only pointer model.
+operations. Integer types have their natural sizes: `char` is 1 byte, `short` is 2, and
+`int` and `long` are 4 on the current 32-bit target. Array elements, struct
+fields, pointer arithmetic, and `sizeof` all use these real sizes, and loads
+and stores are emitted at the matching width. Struct fields are laid out with
+the padding needed to keep each field aligned, plus tail padding so arrays of
+a struct stay aligned. Scalar locals still occupy whole four-byte stack slots.
 
 Local variables are stored in a simple stack frame. Assignment leaves the
 assigned value in `%eax`, so it can be used inside larger expressions.
@@ -285,9 +298,6 @@ This removes the `build/` directory.
   until the code generator assigns symbols unique storage identities
 - Global initializers must be constant expressions
 - Arrays cannot be assigned as whole values
-- Struct support does not include nested structs, struct arrays, or struct
-  parameters yet
-- String indexing still uses the current four-byte element model; cast loaded
-  values to `char` when a byte value is intended
+- Struct support does not include nested structs or struct parameters yet
 - Assembly output is for learning and demonstration, not a complete production
   toolchain

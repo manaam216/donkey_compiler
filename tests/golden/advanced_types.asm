@@ -95,10 +95,10 @@ _main:
     movl    -36(%ebp), %eax
     push    %eax
     movl    $0, %eax
-    imull   $4, %eax
+    imull   $1, %eax
     pop     %edx
     addl    %edx, %eax
-    movl    (%eax), %eax
+    movsbl  (%eax), %eax
     movsbl  %al, %eax
     pop     %edx
     addl    %edx, %eax

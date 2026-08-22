@@ -153,11 +153,25 @@ typedef struct {
 
 struct ast_node {
     ASTNodeType type;
+
+    /*
+     * Syntactic type as written in the source. The parser fills these in; it
+     * cannot build a full type because a struct's layout is not known until
+     * its definition has been collected.
+     */
     CType data_type;
     int pointer_depth;
     int array_length;
-    int string_label;
     char *struct_name;
+
+    /*
+     * Resolved type, filled in by semantic analysis. This is what the code
+     * generator reads for sizes, offsets, and pointer scaling -- the fields
+     * above are the input to resolution, not the type model itself.
+     */
+    struct Type *ty;
+
+    int string_label;
     SourceLocation location;
     struct ast_node *left;
     struct ast_node *right;
