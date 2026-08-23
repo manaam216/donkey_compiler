@@ -6,6 +6,7 @@
 #include "decl.h"
 #include "type.h"
 #include "symbol.h"
+#include "diag.h"
 
 struct global_symbol {
     const char *name;
@@ -276,22 +277,22 @@ static CType semantic_type_from_name(const char *name)
 
 static void semantic_error_at(struct sema_ctx *ctx, struct ast_node *node, const char *format, ...)
 {
+    SourceLocation location;
     va_list args;
+    char message[512];
 
-    fprintf(stderr, "Semantic error");
-    if (node && node->location.line > 0) {
-        fprintf(stderr, " at %s:%d:%d", ctx->source_path,
-            node->location.line, node->location.column);
+    location.line = 0;
+    location.column = 0;
+    if (node) {
+        location = node->location;
     }
-    if (ctx->current_function) {
-        fprintf(stderr, " in function '%s'", ctx->current_function);
-    }
-    fprintf(stderr, ": ");
 
     va_start(args, format);
-    vfprintf(stderr, format, args);
+    vsnprintf(message, sizeof(message), format, args);
     va_end(args);
-    fprintf(stderr, "\n");
+
+    diag_set_function(ctx->current_function);
+    diag_at(DIAG_ERROR, location, "%s", message);
     ctx->error_count++;
 }
 
@@ -599,6 +600,49 @@ static void analyze_block(struct sema_ctx *ctx, struct ast_node *node, int creat
     }
 }
 
+/*
+ * The first statement of a list, looking through nested list nodes, so a
+ * warning can point at the statement itself rather than the list holding it.
+ */
+static struct ast_node *first_statement(struct ast_node *node)
+{
+    while (node && node->type == AST_STATEMENT_LIST) {
+        node = node->left;
+    }
+    return node;
+}
+
+/*
+ * Anything after return, break, or continue in the same block cannot run.
+ * Reported once per block, at the first unreachable statement.
+ */
+static void warn_if_unreachable(struct sema_ctx *ctx, struct ast_node *statement,
+    struct ast_node *rest)
+{
+    struct ast_node *next;
+    const char *keyword;
+
+    if (!statement || !rest) {
+        return;
+    }
+
+    switch (statement->type) {
+        case AST_RETURN:   keyword = "return"; break;
+        case AST_BREAK:    keyword = "break"; break;
+        case AST_CONTINUE: keyword = "continue"; break;
+        default:           return;
+    }
+
+    next = first_statement(rest);
+    if (!next) {
+        return;
+    }
+
+    diag_set_function(ctx->current_function);
+    diag_at(DIAG_WARNING, next->location,
+        "unreachable statement after '%s'", keyword);
+}
+
 static void analyze_statement(struct sema_ctx *ctx, struct ast_node *node)
 {
     struct ast_node *parts;
@@ -614,6 +658,7 @@ static void analyze_statement(struct sema_ctx *ctx, struct ast_node *node)
             break;
         case AST_STATEMENT_LIST:
             analyze_statement(ctx, node->left);
+            warn_if_unreachable(ctx, node->left, node->right);
             analyze_statement(ctx, node->right);
             break;
         case AST_DECL:

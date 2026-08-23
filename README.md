@@ -11,6 +11,7 @@ integer-returning functions.
 |-- include/          Public compiler headers
 |   |-- decl.h
 |   |-- defs.h
+|   |-- diag.h
 |   |-- symbol.h
 |   `-- type.h
 |-- src/              Compiler implementation
@@ -20,6 +21,7 @@ integer-returning functions.
 |   |-- semantic.c    Name, scope, type, and function-call validation
 |   |-- type.c        Type representation, sizes, and struct layout
 |   |-- symbol.c      Storage identities and stack frame layout
+|   |-- diag.c        Diagnostics, error recovery, and warnings
 |   `-- codegen.c     Assembly generator
 |-- examples/         Source examples and reference assembly
 |   |-- sample.c
@@ -252,12 +254,35 @@ wrong number of arguments, non-constant global initializers, and `break` or
 function bodies are checked, so calls to functions defined later in the file
 are valid.
 
-Lexer, parser, and semantic diagnostics include the source path, line, and
-column of the offending token:
+### Diagnostics
+
+Every stage reports what it finds and carries on, so one run surfaces several
+problems rather than the first one and nothing else. Compilation stops between
+stages, where it is safe to: there is no point type-checking a tree the parser
+could not build. After a syntax error the parser resynchronises on the next
+`;` or statement keyword, so a missing semicolon in one function does not hide
+a problem in the next.
+
+Messages use the conventional compiler format, quoting the offending line and
+marking the column:
 
 ```text
-Semantic error at examples/bad.c:3:12 in function 'main': use of undeclared variable 'missing'
+examples/bad.c: In function 'main':
+examples/bad.c:3:12: error: use of undeclared variable 'missing'
+        return missing;
+               ^
 ```
+
+Warnings are reported the same way but do not fail the build. `unreachable
+statement after 'return'` is the first of them.
+
+Beyond twenty errors, further ones are counted but not printed: past that point
+they are usually consequences of earlier problems rather than new information.
+
+A message labelled `internal error` means an invariant the compiler itself was
+supposed to guarantee has been broken -- a bug in Donkey, not in the input.
+Those stop compilation immediately, because continuing would emit wrong code
+rather than report a problem.
 
 Types are represented by a `Type` tree (`include/type.h`) that knows its own
 size and alignment. Semantic analysis resolves each declaration and expression

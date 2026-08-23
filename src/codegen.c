@@ -6,6 +6,7 @@
 #include "decl.h"
 #include "type.h"
 #include "symbol.h"
+#include "diag.h"
 
 static struct {
     char *name;
@@ -110,19 +111,21 @@ static void add_global_node(struct ast_node *node)
     }
 
     if (find_global(node->value) >= 0) {
-        fprintf(stderr, "Redeclaration of global variable '%s'\n", node->value);
-        exit(1);
+        diag_at(DIAG_ERROR, node->location,
+            "redeclaration of global variable '%s'", node->value);
+        return;
     }
 
     if (global_count >= 256) {
-        fprintf(stderr, "Too many global variables\n");
-        exit(1);
+        diag_at(DIAG_ERROR, node->location,
+            "too many global variables (limit is 256)");
+        return;
     }
 
     if (node->array_length > 256) {
-        fprintf(stderr, "Global array '%s' exceeds the supported length of 256\n",
-            node->value);
-        exit(1);
+        diag_at(DIAG_ERROR, node->location,
+            "global array '%s' exceeds the supported length of 256", node->value);
+        return;
     }
 
     globals[global_count].name = strdup(node->value);
@@ -403,8 +406,7 @@ static void generate_lvalue_address(struct cg_ctx *ctx, struct ast_node *node, F
                 struct_field_offset(node->left->ty, node->value));
             return;
         default:
-            fprintf(stderr, "Expression is not assignable\n");
-            exit(1);
+            diag_internal(node->location, "expression is not assignable");
     }
 }
 
@@ -576,8 +578,9 @@ static int eval_const_exp(struct ast_node *node)
         case AST_CAST:
             return cast_constant(eval_const_exp(node->left), node->value);
         default:
-            fprintf(stderr, "Global initializer must be a constant expression\n");
-            exit(1);
+            diag_internal(node->location,
+                "global initializer is not a constant expression");
+            return 0;   /* not reached: diag_internal exits */
     }
 }
 
@@ -762,8 +765,8 @@ static void generate_program(struct cg_ctx *ctx, struct ast_node *node, FILE *ou
         case AST_STRUCT_DEF:
             break;
         default:
-            fprintf(stderr, "Unsupported program node type: %d\n", node->type);
-            exit(1);
+            diag_internal(node->location, "unsupported program node type %d",
+                node->type);
     }
 }
 
@@ -890,21 +893,19 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
         }
         case AST_BREAK:
             if (ctx->loop_depth == 0) {
-                fprintf(stderr, "break used outside of loop\n");
-                exit(1);
+                diag_internal(node->location, "'break' outside a loop");
             }
             fprintf(output, "    jmp     .L%d\n", ctx->loop_break_labels[ctx->loop_depth - 1]);
             break;
         case AST_CONTINUE:
             if (ctx->loop_depth == 0) {
-                fprintf(stderr, "continue used outside of loop\n");
-                exit(1);
+                diag_internal(node->location, "'continue' outside a loop");
             }
             fprintf(output, "    jmp     .L%d\n", ctx->loop_continue_labels[ctx->loop_depth - 1]);
             break;
         default:
-            fprintf(stderr, "Unsupported statement node type: %d\n", node->type);
-            exit(1);
+            diag_internal(node->location, "unsupported statement node type %d",
+                node->type);
     }
 }
 
@@ -1042,8 +1043,7 @@ void generate_binop(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
             fprintf(output, is_unsigned ? "    setae   %%al\n" : "    setge   %%al\n");
             break;
         default:
-            fprintf(stderr, "Unsupported operation in AST\n");
-            exit(1);
+            diag_internal(node->location, "unsupported operation in AST");
     }
 }
 
@@ -1238,8 +1238,8 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             fprintf(output, "    sete    %%al\n");
             break;
         default:
-            fprintf(stderr, "Unsupported AST node type: %d\n", node->type);
-            exit(1);
+            diag_internal(node->location, "unsupported AST node type %d",
+                node->type);
     }
 }
 
@@ -1260,8 +1260,8 @@ static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *o
     }
 
     if (node->type != AST_ARG_LIST) {
-        fprintf(stderr, "Unsupported argument node type: %d\n", node->type);
-        exit(1);
+        diag_internal(node->location, "unsupported argument node type %d",
+            node->type);
     }
 
     int count = generate_call_args(ctx, node->right, output);
