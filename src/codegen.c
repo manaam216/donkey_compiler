@@ -1273,7 +1273,13 @@ static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *o
 
 void write_assembly_to_file(const char *filename, struct ast_node *ast)
 {
-    FILE *out_file = fopen(filename, "w");
+    /*
+     * Binary mode, so a newline stays one byte on every platform. In text mode
+     * Windows would write CRLF, and the generated assembly would differ from
+     * the same compiler's output on Linux -- which would make the byte-for-byte
+     * golden comparison platform-dependent. "b" is a no-op on POSIX.
+     */
+    FILE *out_file = fopen(filename, "wb");
     if (!out_file) {
         perror("Failed to open file for writing");
         exit(EXIT_FAILURE);
