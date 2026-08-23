@@ -32,7 +32,7 @@ static void test_basic_sizes(void)
     check_int("sizeof(short)", ty_short->size, 2);
     check_int("alignof(short)", ty_short->align, 2);
     check_int("sizeof(int)", ty_int->size, 4);
-    check_int("sizeof(long)", ty_long->size, 4);
+    check_int("sizeof(long)", ty_long->size, 8);
     check_int("unsigned char is unsigned", ty_uchar->is_unsigned, 1);
     check_int("char is signed", ty_char->is_unsigned, 0);
 }
@@ -58,10 +58,10 @@ static void test_pointers(void)
     struct Type *pchar = ty_pointer_to(ty_char);
     struct Type *ppchar = ty_pointer_to(pchar);
 
-    check_int("sizeof(char*)", pchar->size, 4);
+    check_int("sizeof(char*)", pchar->size, 8);
     /* Scaling char* arithmetic by 1, not 4. */
     check_int("char* element size", ty_element_size(pchar), 1);
-    check_int("char** element size", ty_element_size(ppchar), 4);
+    check_int("char** element size", ty_element_size(ppchar), 8);
 }
 
 static void test_decay(void)
@@ -90,7 +90,7 @@ static void test_struct_layout(void)
     c = ty_find_member(s, "c");
 
     check_int("member a offset", a->offset, 0);
-    check_int("member b offset", b->offset, 4);   /* was 4 by luck, now by rule */
+    check_int("member b offset", b->offset, 4);   /* after padding, by rule */
     check_int("member c offset", c->offset, 8);
     check_int("struct align", s->align, 4);
     check_int("struct size with tail padding", s->size, 12);

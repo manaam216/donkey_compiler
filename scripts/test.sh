@@ -11,11 +11,18 @@ compiler="${build_dir}/donkey"
 # and a codegen regression.
 update_golden="${UPDATE_GOLDEN:-0}"
 
-# Set SKIP_RUN=1 to check compilation, golden assembly, and diagnostics without
-# assembling or executing anything. Codegen still emits MinGW-style `_main`
-# symbols, so linking only works on i686 Windows until the x86-64 System V
-# backend lands; this lets other platforms exercise the rest of the compiler.
-skip_run="${SKIP_RUN:-0}"
+# Donkey emits x86-64 System V assembly, so assembling and running the output
+# needs a matching host toolchain. Where there is not one -- a 32-bit MinGW
+# development box, say -- the suite still compiles every example, diffs the
+# golden assembly, and checks every diagnostic; it just cannot execute.
+# Set SKIP_RUN=1 to force that mode, or 0 to insist on running.
+if [ -n "${SKIP_RUN:-}" ]; then
+    skip_run="$SKIP_RUN"
+elif "$cc" -dumpmachine 2>/dev/null | grep -q "^x86_64.*linux"; then
+    skip_run=0
+else
+    skip_run=1
+fi
 
 golden_dir=tests/golden
 expected_dir=tests/expected
@@ -45,6 +52,7 @@ examples/char_arrays.c char_arrays
 examples/struct_layout.c struct_layout
 examples/struct_arrays.c struct_arrays
 examples/shadowing.c shadowing
+examples/many_args.c many_args
 tests/semantic/valid_forward_call.c valid_forward_call
 "
 
@@ -122,9 +130,10 @@ while read -r source name; do
         continue
     fi
 
+
     # Rename the example's entry point so the harness can own `main`.
-    # \b_main\b avoids touching identifiers that merely end in _main.
-    sed 's/\b_main\b/_donkey_main/g' "$asm" > "$wrapped"
+    # \bmain\b avoids touching identifiers that merely contain "main".
+    sed 's/\bmain\b/donkey_main/g' "$asm" > "$wrapped"
 
     "$cc" -x assembler "$wrapped" -x c tests/harness.c -o "$exe"
 

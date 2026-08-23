@@ -1,170 +1,174 @@
-.globl _main
-_main:
-    push    %ebp
-    movl    %esp, %ebp
-    subl    $12, %esp
+.globl main
+main:
+    pushq   %rbp
+    movq    %rsp, %rbp
+    subq    $16, %rsp
     movl    $260, %eax
-    movl    %eax, -4(%ebp)
+    movl    %eax, -4(%rbp)
     movl    $65535, %eax
-    movl    %eax, -8(%ebp)
+    movl    %eax, -8(%rbp)
     movl    $0, %eax
-    movl    %eax, -12(%ebp)
-    movl    -12(%ebp), %eax
-    push    %eax
-    movl    -4(%ebp), %eax
+    movl    %eax, -12(%rbp)
+    movl    -12(%rbp), %eax
+    pushq   %rax
+    movl    -4(%rbp), %eax
     movsbl  %al, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
-    push    %eax
-    movl    -4(%ebp), %eax
+    movl    -12(%rbp), %eax
+    pushq   %rax
+    movl    -4(%rbp), %eax
     movsbl  %al, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
-    push    %eax
-    movl    -4(%ebp), %eax
+    movl    -12(%rbp), %eax
+    pushq   %rax
+    movl    -4(%rbp), %eax
     movzbl  %al, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
-    push    %eax
-    movl    -8(%ebp), %eax
+    movl    -12(%rbp), %eax
+    pushq   %rax
+    movl    -8(%rbp), %eax
     movswl  %ax, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
-    push    %eax
-    movl    -8(%ebp), %eax
+    movl    -12(%rbp), %eax
+    pushq   %rax
+    movl    -8(%rbp), %eax
     movswl  %ax, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
-    push    %eax
-    movl    -8(%ebp), %eax
+    movl    -12(%rbp), %eax
+    pushq   %rax
+    movl    -8(%rbp), %eax
     movzwl  %ax, %eax
-    push    %eax
+    pushq   %rax
     movl    $7, %eax
-    pop     %edx
-    push    %eax
+    popq    %rdx
+    pushq   %rax
     movl    %edx, %eax
-    pop     %ecx
+    popq    %rcx
     cdq
     idivl   %ecx
     movl    %edx, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
-    push    %eax
+    movl    -12(%rbp), %eax
+    pushq   %rax
     movl    $3, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
-    push    %eax
+    movl    -12(%rbp), %eax
+    cltq
+    pushq   %rax
     movl    $2, %eax
-    pop     %edx
+    cltq
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
-    push    %eax
+    movl    -12(%rbp), %eax
+    pushq   %rax
     movl    $1, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
-    push    %eax
+    movl    -12(%rbp), %eax
+    movl    %eax, %eax
+    pushq   %rax
     movl    $1, %eax
-    pop     %edx
+    movl    %eax, %eax
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
-    push    %eax
+    movl    -12(%rbp), %eax
+    pushq   %rax
     movl    $1, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
-    push    %eax
+    movl    -12(%rbp), %eax
+    pushq   %rax
     movl    $2, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
-    push    %eax
+    movl    -12(%rbp), %eax
+    pushq   %rax
     movl    $4, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
-    push    %eax
-    movl    $4, %eax
-    pop     %edx
+    movl    -12(%rbp), %eax
+    pushq   %rax
+    movl    $8, %eax
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -12(%ebp), %eax
+    movl    -12(%rbp), %eax
     jmp     .L0
     movl    $0, %eax
 .L0:

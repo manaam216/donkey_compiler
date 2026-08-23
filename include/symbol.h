@@ -33,6 +33,13 @@ struct Symbol {
 
     /* SYM_FUNCTION: bytes of stack needed for this function's locals. */
     int frame_size;
+
+    /*
+     * SYM_PARAM: which argument this is. System V passes the first six integer
+     * or pointer arguments in registers, so those are spilled into the frame on
+     * entry; later ones already sit on the stack.
+     */
+    int param_index;
 };
 
 struct Symbol *sym_new(const char *name, SymbolKind kind, struct Type *ty);

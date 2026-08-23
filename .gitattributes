@@ -1,0 +1,13 @@
+# The test suite compares generated assembly and program output byte for byte,
+# on both Linux and Windows. Pin these to LF so a checkout on either platform
+# matches what the compiler and harness produce.
+*.asm text eol=lf
+tests/expected/*.txt text eol=lf
+
+# Shell scripts must keep LF to stay executable under sh.
+*.sh text eol=lf
+
+*.c text
+*.h text
+*.md text
+Makefile text

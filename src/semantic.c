@@ -418,9 +418,20 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
         struct Type *resolved = resolve_type(ctx, node);
         int size = resolved->size > 0 ? resolved->size : 4;
 
+        int align = resolved->align > 0 ? resolved->align : 4;
+
+        if (align < 4) {
+            align = 4;          /* never pack scalars tighter than a word */
+        }
+
         node->sym = sym_new(name, SYM_LOCAL, resolved);
-        /* Slots stay 4-byte aligned; the frame grows downward from %ebp. */
-        ctx->frame_offset += (size + 3) / 4 * 4;
+        /*
+         * The frame grows downward from %rbp, so round the running total up to
+         * the type's alignment before claiming the slot. An 8-byte pointer or
+         * long must land on an 8-byte boundary.
+         */
+        ctx->frame_offset += size;
+        ctx->frame_offset = (ctx->frame_offset + align - 1) / align * align;
         node->sym->offset = -ctx->frame_offset;
         if (ctx->frame_offset > ctx->frame_max) {
             ctx->frame_max = ctx->frame_offset;
@@ -445,8 +456,29 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
 static void add_parameter(struct sema_ctx *ctx, struct ast_node *node, int index)
 {
     if (!node->sym) {
-        node->sym = sym_new(node->value, SYM_PARAM, resolve_type(ctx, node));
-        node->sym->offset = 8 + (index * 4);
+        struct Type *resolved = resolve_type(ctx, node);
+
+        node->sym = sym_new(node->value, SYM_PARAM, resolved);
+        node->sym->param_index = index;
+
+        if (index < 6) {
+            /*
+             * Passed in a register: give it a frame slot for the prologue to
+             * spill into, so it can be addressed like any other local.
+             */
+            int size = resolved->size > 0 ? resolved->size : 8;
+            int align = resolved->align > 4 ? resolved->align : 4;
+
+            ctx->frame_offset += size;
+            ctx->frame_offset = (ctx->frame_offset + align - 1) / align * align;
+            node->sym->offset = -ctx->frame_offset;
+            if (ctx->frame_offset > ctx->frame_max) {
+                ctx->frame_max = ctx->frame_offset;
+            }
+        } else {
+            /* Already on the stack, above the saved %rbp and return address. */
+            node->sym->offset = 16 + ((index - 6) * 8);
+        }
     }
     add_local(ctx, node, node->data_type);
 }
@@ -763,8 +795,14 @@ static CType usual_arithmetic_type(CType left, CType right)
     right = integer_promotion(right);
     if (left == right) return left;
     if (left == TYPE_ULONG || right == TYPE_ULONG) return TYPE_ULONG;
+    /*
+     * On LP64 a long is wider than an unsigned int and can represent every one
+     * of its values, so the unsigned operand converts to long rather than both
+     * becoming unsigned. (Where long and int are the same width -- ILP32 --
+     * the result would be unsigned long instead.)
+     */
     if ((left == TYPE_LONG && right == TYPE_UINT) ||
-        (left == TYPE_UINT && right == TYPE_LONG)) return TYPE_ULONG;
+        (left == TYPE_UINT && right == TYPE_LONG)) return TYPE_LONG;
     if (left == TYPE_UINT || right == TYPE_UINT) return TYPE_UINT;
     if (left == TYPE_LONG || right == TYPE_LONG) return TYPE_LONG;
     return TYPE_INT;
@@ -1218,8 +1256,11 @@ static void check_top_level_types(struct sema_ctx *ctx, struct ast_node *node)
         ctx->local_count = 0;
         ctx->scope_depth = 1;
         ctx->frame_offset = 0;
-        for (param = node->left; param; param = param->right)
-            add_parameter(ctx, param->left, 0);
+        {
+            int param_index = 0;
+            for (param = node->left; param; param = param->right)
+                add_parameter(ctx, param->left, param_index++);
+        }
         if (node->right) check_statement_types(ctx, node->right->left);
     }
 }

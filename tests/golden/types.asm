@@ -1,15 +1,17 @@
 .data
-.globl _global_byte
-_global_byte:
-    .long   44
-.globl _global_signed_byte
-_global_signed_byte:
-    .long   -1
+    .align  1
+.globl global_byte
+global_byte:
+    .byte   44
+    .align  1
+.globl global_signed_byte
+global_signed_byte:
+    .byte   -1
 .text
-.globl _narrow_return
-_narrow_return:
-    push    %ebp
-    movl    %esp, %ebp
+.globl narrow_return
+narrow_return:
+    pushq   %rbp
+    movq    %rsp, %rbp
     movl    $300, %eax
     movzbl  %al, %eax
     jmp     .L0
@@ -17,114 +19,120 @@ _narrow_return:
 .L0:
     leave
     ret
-.globl _narrow_argument
-_narrow_argument:
-    push    %ebp
-    movl    %esp, %ebp
-    movl    8(%ebp), %eax
+.globl narrow_argument
+narrow_argument:
+    pushq   %rbp
+    movq    %rsp, %rbp
+    subq    $16, %rsp
+    movl    %edi, -4(%rbp)
+    movzbl  -4(%rbp), %eax
     jmp     .L1
     movl    $0, %eax
 .L1:
     leave
     ret
-.globl _main
-_main:
-    push    %ebp
-    movl    %esp, %ebp
-    subl    $16, %esp
+.globl main
+main:
+    pushq   %rbp
+    movq    %rsp, %rbp
+    subq    $32, %rsp
     movl    $1, %eax
     negl    %eax
-    movl    %eax, -4(%ebp)
+    movl    %eax, -4(%rbp)
     movl    $255, %eax
     movzbl  %al, %eax
-    movl    %eax, -8(%ebp)
+    movl    %eax, -8(%rbp)
     movl    $1, %eax
     negl    %eax
-    movl    %eax, -12(%ebp)
+    cltq
+    movq    %rax, -16(%rbp)
     movl    $0, %eax
-    movl    %eax, -16(%ebp)
-    movl    -8(%ebp), %eax
-    push    %eax
+    movl    %eax, -20(%rbp)
+    movzbl  -8(%rbp), %eax
+    pushq   %rax
     addl    $1, %eax
     movzbl  %al, %eax
-    movl    %eax, -8(%ebp)
-    pop     %eax
-    call    _narrow_return
-    push    %eax
+    movl    %eax, -8(%rbp)
+    popq    %rax
+    movl    $0, %eax
+    call    narrow_return
+    pushq   %rax
     movl    $300, %eax
     movzbl  %al, %eax
-    push    %eax
-    call    _narrow_argument
-    addl    $4, %esp
-    pop     %edx
+    pushq   %rax
+    popq    %rdi
+    movl    $0, %eax
+    call    narrow_argument
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    movl    -4(%ebp), %eax
-    push    %eax
+    pushq   %rax
+    movl    -4(%rbp), %eax
+    pushq   %rax
     movl    $1, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     seta    %al
-    push    %eax
+    pushq   %rax
     movl    $10, %eax
-    pop     %edx
+    popq    %rdx
     imull   %edx, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    movl    -4(%ebp), %eax
-    push    %eax
+    pushq   %rax
+    movl    -4(%rbp), %eax
+    pushq   %rax
     movl    $31, %eax
-    pop     %edx
+    popq    %rdx
     movl    %eax, %ecx
     movl    %edx, %eax
     shrl    %cl, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    movl    -4(%ebp), %eax
-    push    %eax
+    pushq   %rax
+    movl    -4(%rbp), %eax
+    pushq   %rax
     movl    $2, %eax
-    pop     %edx
-    push    %eax
+    popq    %rdx
+    pushq   %rax
     movl    %edx, %eax
-    pop     %ecx
+    popq    %rcx
     xorl    %edx, %edx
     divl    %ecx
-    push    %eax
+    pushq   %rax
     movl    $100, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     seta    %al
-    push    %eax
+    pushq   %rax
     movl    $20, %eax
-    pop     %edx
+    popq    %rdx
     imull   %edx, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    movl    _global_byte, %eax
-    pop     %edx
+    pushq   %rax
+    movzbl  global_byte(%rip), %eax
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    movl    _global_signed_byte, %eax
-    pop     %edx
+    pushq   %rax
+    movsbl  global_signed_byte(%rip), %eax
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    movl    -8(%ebp), %eax
-    pop     %edx
+    pushq   %rax
+    movzbl  -8(%rbp), %eax
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    movl    -12(%ebp), %eax
-    push    %eax
-    movl    -16(%ebp), %eax
-    pop     %edx
-    cmpl    %eax, %edx
+    pushq   %rax
+    movq    -16(%rbp), %rax
+    pushq   %rax
+    movl    -20(%rbp), %eax
+    cltq
+    popq    %rdx
+    cmpq    %rax, %rdx
     movl    $0, %eax
-    setb    %al
-    pop     %edx
+    setl    %al
+    popq    %rdx
     addl    %edx, %eax
     jmp     .L2
     movl    $0, %eax

@@ -5,8 +5,25 @@ on:
   pull_request:
 
 jobs:
+  linux:
+    name: Linux x86-64 (full)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: make
+
+      # The primary job: Donkey emits x86-64 System V assembly, so this is the
+      # platform that can assemble it, link it against the system libc, and run
+      # the results.
+      - name: Test
+        run: make test
+
   windows:
-    name: Windows i686 (full)
+    name: Windows i686 (compile only)
     runs-on: windows-latest
 
     defaults:
@@ -24,33 +41,16 @@ jobs:
           update: true
           install: >-
             make
-            gawk
             diffutils
             mingw-w64-i686-gcc
 
       - name: Build
         run: make
 
-      # The only platform that can currently assemble, link, and run the
-      # generated code: codegen emits MinGW-style `_main` symbols.
-      - name: Test
-        run: make test
-
-  linux:
-    name: Linux x86-64 (compile only)
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Build
-        run: make
-
-      # Cannot link yet -- generated assembly uses the MinGW `_main` symbol
-      # convention. Until the x86-64 System V backend lands, this job still
-      # catches portability bugs in the compiler's own C code and verifies
-      # golden assembly plus every diagnostic.
+      # A 32-bit MinGW toolchain cannot assemble x86-64 System V output, so
+      # this job compiles every example, diffs the golden assembly, and checks
+      # every diagnostic. Its value is catching portability bugs in the
+      # compiler's own source.
       - name: Test (compile only)
         run: SKIP_RUN=1 make test
 
@@ -67,8 +67,6 @@ jobs:
           CFLAGS: -Wall -Wextra -g -fsanitize=address,undefined -fno-omit-frame-pointer
           ASAN_OPTIONS: detect_leaks=0
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-          SKIP_RUN: "1"
-        # Leak detection is off for now: globals[], structs[], and strings[] in
+        # Leak detection is off for now: the globals and strings tables in
         # codegen.c leak by design, and every exit() path abandons the AST.
-        # Turn it on once the compiler-context refactor gives those owners.
         run: make test

@@ -1,33 +1,33 @@
-.globl _main
-_main:
-    push    %ebp
-    movl    %esp, %ebp
+.globl main
+main:
+    pushq   %rbp
+    movq    %rsp, %rbp
     movl    $10, %eax
-    push    %eax
+    pushq   %rax
     movl    $4, %eax
-    pop     %edx
-    push    %eax
+    popq    %rdx
+    pushq   %rax
     movl    %edx, %eax
-    pop     %ecx
+    popq    %rcx
     cdq
     idivl   %ecx
     movl    %edx, %eax
-    push    %eax
+    pushq   %rax
     movl    $2, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     sete    %al
     cmpl    $0, %eax
     je      .L15
     movl    $7, %eax
-    push    %eax
+    pushq   %rax
     movl    $3, %eax
-    pop     %edx
+    popq    %rdx
     andl    %edx, %eax
-    push    %eax
+    pushq   %rax
     movl    $3, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     sete    %al
@@ -41,13 +41,13 @@ _main:
     cmpl    $0, %eax
     je      .L13
     movl    $4, %eax
-    push    %eax
+    pushq   %rax
     movl    $1, %eax
-    pop     %edx
+    popq    %rdx
     orl     %edx, %eax
-    push    %eax
+    pushq   %rax
     movl    $5, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     sete    %al
@@ -61,13 +61,13 @@ _main:
     cmpl    $0, %eax
     je      .L11
     movl    $6, %eax
-    push    %eax
+    pushq   %rax
     movl    $3, %eax
-    pop     %edx
+    popq    %rdx
     xorl    %edx, %eax
-    push    %eax
+    pushq   %rax
     movl    $5, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     sete    %al
@@ -81,9 +81,9 @@ _main:
     cmpl    $0, %eax
     je      .L9
     movl    $3, %eax
-    push    %eax
+    pushq   %rax
     movl    $4, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     setl    %al
@@ -97,9 +97,9 @@ _main:
     cmpl    $0, %eax
     je      .L7
     movl    $4, %eax
-    push    %eax
+    pushq   %rax
     movl    $4, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     setle   %al
@@ -113,9 +113,9 @@ _main:
     cmpl    $0, %eax
     je      .L5
     movl    $5, %eax
-    push    %eax
+    pushq   %rax
     movl    $2, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     setg    %al
@@ -129,9 +129,9 @@ _main:
     cmpl    $0, %eax
     je      .L3
     movl    $5, %eax
-    push    %eax
+    pushq   %rax
     movl    $5, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     setge   %al
