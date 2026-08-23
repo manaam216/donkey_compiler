@@ -5,30 +5,23 @@
 #include "defs.h"
 #include "decl.h"
 #include "type.h"
+#include "symbol.h"
 
-static struct {
-    char *name;
-    int offset;
-    int array_length;
-    char *struct_name;
-    struct Type *ty;
-} symbols[256];
 static struct {
     char *name;
     int array_length;
     struct Type *ty;
     int values[256];
 } globals[256];
-static int symbol_count = 0;
 static int global_count = 0;
-static int local_stack_count = 0;
 
 /*
  * Emitter state: label numbering, the active function's exit label, the
- * break/continue label stacks, and interned string literals. The symbol,
- * struct, and global tables above stay file-scope for now -- they duplicate
- * work semantic analysis already did and are slated for removal once codegen
- * reads its symbols from the annotated AST instead.
+ * break/continue label stacks, and interned string literals.
+ *
+ * Codegen no longer keeps a symbol table. Storage locations, types, and frame
+ * sizes are read from the symbols semantic analysis attached to the AST. The
+ * globals array above remains only as the list of static data to emit.
  */
 struct cg_string {
     char *value;
@@ -76,28 +69,6 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
 static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
 static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
 
-static int find_local(const char *name)
-{
-    for (int i = 0; i < symbol_count; i++) {
-        if (strcmp(symbols[i].name, name) == 0) {
-            return i;
-        }
-    }
-
-    return -1;
-}
-
-static int local_offset(const char *name)
-{
-    int index = find_local(name);
-    if (index < 0) {
-        fprintf(stderr, "Use of undeclared identifier '%s'\n", name);
-        exit(1);
-    }
-
-    return symbols[index].offset;
-}
-
 static int find_global(const char *name)
 {
     for (int i = 0; i < global_count; i++) {
@@ -107,30 +78,6 @@ static int find_global(const char *name)
     }
 
     return -1;
-}
-
-static void add_symbol(const char *name, int offset, struct Type *ty)
-{
-    if (!name) {
-        return;
-    }
-
-    if (find_local(name) >= 0) {
-        fprintf(stderr, "Redeclaration of local variable '%s'\n", name);
-        exit(1);
-    }
-
-    if (symbol_count >= 256) {
-        fprintf(stderr, "Too many local variables or parameters\n");
-        exit(1);
-    }
-
-    symbols[symbol_count].name = strdup(name);
-    symbols[symbol_count].offset = offset;
-    symbols[symbol_count].array_length = 0;
-    symbols[symbol_count].struct_name = NULL;
-    symbols[symbol_count].ty = ty;
-    symbol_count++;
 }
 
 static int struct_field_offset(struct Type *ty, const char *field_name)
@@ -191,70 +138,6 @@ static void add_global_node(struct ast_node *node)
         globals[global_count].values[0] = eval_const_exp(node->left);
     }
     global_count++;
-}
-
-static void add_param(struct ast_node *node, int index)
-{
-    add_symbol(node->value, 8 + (index * 4), node->ty);
-}
-
-static void add_local_node(struct ast_node *node)
-{
-    /* Stack slots stay 4 bytes wide; round the type's size up to fill them. */
-    int size = node->ty ? node->ty->size : 4;
-    int slots = (size + 3) / 4;
-
-    if (slots < 1) {
-        slots = 1;
-    }
-
-    local_stack_count += slots;
-    add_symbol(node->value, -4 * local_stack_count, node->ty);
-    symbols[symbol_count - 1].array_length = node->array_length;
-    symbols[symbol_count - 1].struct_name = node->struct_name ? strdup(node->struct_name) : NULL;
-}
-
-static int collect_params(struct ast_node *node, int index)
-{
-    if (!node) {
-        return index;
-    }
-
-    if (node->type != AST_PARAM_LIST) {
-        fprintf(stderr, "Unsupported parameter node type: %d\n", node->type);
-        exit(1);
-    }
-
-    add_param(node->left, index);
-    return collect_params(node->right, index + 1);
-}
-
-static void collect_locals(struct ast_node *node)
-{
-    if (!node) {
-        return;
-    }
-
-    if (node->type == AST_DECL) {
-        add_local_node(node);
-    }
-
-    collect_locals(node->left);
-    collect_locals(node->right);
-}
-
-static void free_locals(void)
-{
-    for (int i = 0; i < symbol_count; i++) {
-        free(symbols[i].name);
-        symbols[i].name = NULL;
-        symbols[i].offset = 0;
-        symbols[i].array_length = 0;
-        free(symbols[i].struct_name);
-        symbols[i].struct_name = NULL;
-    }
-    symbol_count = 0;
-    local_stack_count = 0;
 }
 
 /*
@@ -325,66 +208,55 @@ static void generate_epilogue(FILE *output)
     fprintf(output, "    ret\n");
 }
 
-static void generate_identifier_load(const char *name, FILE *output)
+/*
+ * Storage comes straight off the symbol semantic analysis attached to the
+ * node. There is no name lookup here any more, so an unresolved name cannot
+ * reach the code generator: it is prevented by construction rather than by a
+ * runtime check.
+ */
+static int is_frame_symbol(struct Symbol *sym)
 {
-    int local_index = find_local(name);
-    if (local_index >= 0) {
-        if (symbols[local_index].array_length > 0) {
-            fprintf(output, "    leal    %d(%%ebp), %%eax\n", symbols[local_index].offset);
-            return;
-        }
-        fprintf(output, "    movl    %d(%%ebp), %%eax\n", symbols[local_index].offset);
-        return;
-    }
-
-    if (find_global(name) >= 0) {
-        int global_index = find_global(name);
-        if (globals[global_index].array_length > 0) {
-            fprintf(output, "    movl    $_%s, %%eax\n", name);
-            return;
-        }
-        fprintf(output, "    movl    _%s, %%eax\n", name);
-        return;
-    }
-
-    fprintf(stderr, "Use of undeclared identifier '%s'\n", name);
-    exit(1);
+    return sym->kind == SYM_LOCAL || sym->kind == SYM_PARAM;
 }
 
-static void generate_identifier_store(const char *name, FILE *output)
+static void generate_identifier_load(struct ast_node *node, FILE *output)
 {
-    int local_index = find_local(name);
-    if (local_index >= 0) {
-        fprintf(output, "    movl    %%eax, %d(%%ebp)\n", symbols[local_index].offset);
+    struct Symbol *sym = node->sym;
+    int is_array = sym->ty && sym->ty->kind == TY_ARRAY;
+
+    if (is_frame_symbol(sym)) {
+        /* An array's value is its address; anything else is loaded. */
+        fprintf(output, is_array ? "    leal    %d(%%ebp), %%eax\n"
+                                 : "    movl    %d(%%ebp), %%eax\n", sym->offset);
         return;
     }
 
-    if (find_global(name) >= 0) {
-        fprintf(output, "    movl    %%eax, _%s\n", name);
+    fprintf(output, is_array ? "    movl    $_%s, %%eax\n"
+                             : "    movl    _%s, %%eax\n", sym->name);
+}
+
+static void generate_identifier_store(struct ast_node *node, FILE *output)
+{
+    struct Symbol *sym = node->sym;
+
+    if (is_frame_symbol(sym)) {
+        fprintf(output, "    movl    %%eax, %d(%%ebp)\n", sym->offset);
         return;
     }
 
-    fprintf(stderr, "Use of undeclared identifier '%s'\n", name);
-    exit(1);
+    fprintf(output, "    movl    %%eax, _%s\n", sym->name);
 }
 
 static void generate_lvalue_address(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
-    int local_index;
-
     switch (node->type) {
         case AST_IDENTIFIER:
-            local_index = find_local(node->value);
-            if (local_index >= 0) {
-                fprintf(output, "    leal    %d(%%ebp), %%eax\n", symbols[local_index].offset);
-                return;
+            if (is_frame_symbol(node->sym)) {
+                fprintf(output, "    leal    %d(%%ebp), %%eax\n", node->sym->offset);
+            } else {
+                fprintf(output, "    movl    $_%s, %%eax\n", node->sym->name);
             }
-            if (find_global(node->value) >= 0) {
-                fprintf(output, "    movl    $_%s, %%eax\n", node->value);
-                return;
-            }
-            fprintf(stderr, "Use of undeclared identifier '%s'\n", node->value);
-            exit(1);
+            return;
         case AST_DEREFERENCE:
             generate_exp(ctx, node->left, output);
             return;
@@ -651,22 +523,25 @@ static void generate_globals(struct cg_ctx *ctx, FILE *output)
 
 static void generate_function(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
-    collect_params(node->left, 0);
-    collect_locals(node->right);
+    /*
+     * Frame size was computed during semantic analysis, which knows the scopes
+     * and can reuse slots between disjoint blocks. Nothing is collected here.
+     */
+    int frame_size = node->sym ? node->sym->frame_size : 0;
+
     ctx->current_function_end_label = ctx->label_count++;
 
     fprintf(output, ".globl _%s\n", node->value);
     fprintf(output, "_%s:\n", node->value);
     fprintf(output, "    push    %%ebp\n");
     fprintf(output, "    movl    %%esp, %%ebp\n");
-    if (local_stack_count > 0) {
-        fprintf(output, "    subl    $%d, %%esp\n", local_stack_count * 4);
+    if (frame_size > 0) {
+        fprintf(output, "    subl    $%d, %%esp\n", frame_size);
     }
     generate_statement(ctx, node->right, output);
     fprintf(output, "    movl    $0, %%eax\n");
     fprintf(output, ".L%d:\n", ctx->current_function_end_label);
     generate_epilogue(output);
-    free_locals();
 }
 
 static void generate_program(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
@@ -715,7 +590,7 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
             break;
         case AST_DECL:
             if (node->array_length > 0) {
-                int offset = local_offset(node->value);
+                int offset = node->sym->offset;
                 /*
                  * Step by the element's real size. Striding by 4 through a
                  * char array would run past its end -- straight over the saved
@@ -737,10 +612,16 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
                     index++;
                 }
             } else if (node->left) {
+                /*
+                 * A scalar local owns a whole 4-byte slot and is read back with
+                 * a 4-byte load, so write all four bytes. The value has already
+                 * been narrowed and extended to its declared type. Narrow
+                 * stores are only for packed array elements, above.
+                 */
                 generate_exp(ctx, node->left, output);
-                fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->value));
+                fprintf(output, "    movl    %%eax, %d(%%ebp)\n", node->sym->offset);
             } else {
-                fprintf(output, "    movl    $0, %d(%%ebp)\n", local_offset(node->value));
+                fprintf(output, "    movl    $0, %d(%%ebp)\n", node->sym->offset);
             }
             break;
         case AST_EXPR_STMT:
@@ -982,7 +863,7 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             fprintf(output, "    movl    $.LC%d, %%eax\n", node->string_label);
             break;
         case AST_IDENTIFIER:
-            generate_identifier_load(node->value, output);
+            generate_identifier_load(node, output);
             break;
         case AST_CALL: {
             int arg_count = generate_call_args(ctx, node->left, output);
@@ -1086,31 +967,31 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             emit_load_indirect(node->ty, output);
             break;
         case AST_PRE_INCREMENT:
-            generate_identifier_load(node->left->value, output);
+            generate_identifier_load(node->left, output);
             fprintf(output, "    addl    $%d, %%eax\n", node->pointer_depth > 0 ? 4 : 1);
             generate_cast(codegen_type_name(node->data_type), output);
-            generate_identifier_store(node->left->value, output);
+            generate_identifier_store(node->left, output);
             break;
         case AST_PRE_DECREMENT:
-            generate_identifier_load(node->left->value, output);
+            generate_identifier_load(node->left, output);
             fprintf(output, "    subl    $%d, %%eax\n", node->pointer_depth > 0 ? 4 : 1);
             generate_cast(codegen_type_name(node->data_type), output);
-            generate_identifier_store(node->left->value, output);
+            generate_identifier_store(node->left, output);
             break;
         case AST_POST_INCREMENT:
-            generate_identifier_load(node->left->value, output);
+            generate_identifier_load(node->left, output);
             fprintf(output, "    push    %%eax\n");
             fprintf(output, "    addl    $%d, %%eax\n", node->pointer_depth > 0 ? 4 : 1);
             generate_cast(codegen_type_name(node->data_type), output);
-            generate_identifier_store(node->left->value, output);
+            generate_identifier_store(node->left, output);
             fprintf(output, "    pop     %%eax\n");
             break;
         case AST_POST_DECREMENT:
-            generate_identifier_load(node->left->value, output);
+            generate_identifier_load(node->left, output);
             fprintf(output, "    push    %%eax\n");
             fprintf(output, "    subl    $%d, %%eax\n", node->pointer_depth > 0 ? 4 : 1);
             generate_cast(codegen_type_name(node->data_type), output);
-            generate_identifier_store(node->left->value, output);
+            generate_identifier_store(node->left, output);
             fprintf(output, "    pop     %%eax\n");
             break;
         case AST_SIZEOF:
@@ -1157,7 +1038,6 @@ static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *o
 
     return count + 1;
 }
-
 
 void write_assembly_to_file(const char *filename, struct ast_node *ast)
 {

@@ -44,6 +44,7 @@ examples/wide_values.c wide_values
 examples/char_arrays.c char_arrays
 examples/struct_layout.c struct_layout
 examples/struct_arrays.c struct_arrays
+examples/shadowing.c shadowing
 tests/semantic/valid_forward_call.c valid_forward_call
 "
 
@@ -56,7 +57,7 @@ cflags="${CFLAGS:--Wall -Wextra -g}"
 
 # shellcheck disable=SC2086 # cflags is a deliberate word-split flag list
 "$cc" -Iinclude $cflags -o "$compiler" \
-    src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c src/type.c
+    src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c src/type.c src/symbol.c
 
 failures=0
 
@@ -160,7 +161,6 @@ expect_error tests/semantic/undeclared_variable.c "Semantic error at tests/seman
 expect_error tests/semantic/wrong_argument_count.c "expects 2 argument(s), but 1 provided"
 expect_error tests/semantic/duplicate_declaration.c "duplicate declaration of 'value'"
 expect_error tests/semantic/break_outside_loop.c "'break' statement is not inside a loop"
-expect_error tests/semantic/shadowing.c "variable shadowing is not supported for 'value'"
 expect_error tests/semantic/call_shadowed_function.c "called object 'helper' is not a function"
 expect_error tests/semantic/invalid_pointer_assignment.c "cannot assign int to int*"
 expect_error tests/semantic/invalid_dereference.c "cannot dereference non-pointer expression"

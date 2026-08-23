@@ -3,7 +3,7 @@ CFLAGS ?= -Wall -Wextra -g
 CPPFLAGS ?= -Iinclude
 BUILD_DIR ?= build
 TARGET ?= $(BUILD_DIR)/donkey
-SRC = src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c src/type.c
+SRC = src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c src/type.c src/symbol.c
 
 .PHONY: all clean sample test
 

@@ -11,6 +11,7 @@ integer-returning functions.
 |-- include/          Public compiler headers
 |   |-- decl.h
 |   |-- defs.h
+|   |-- symbol.h
 |   `-- type.h
 |-- src/              Compiler implementation
 |   |-- main.c        CLI entry point
@@ -18,6 +19,7 @@ integer-returning functions.
 |   |-- parser.c      Recursive descent parser and AST allocation
 |   |-- semantic.c    Name, scope, type, and function-call validation
 |   |-- type.c        Type representation, sizes, and struct layout
+|   |-- symbol.c      Storage identities and stack frame layout
 |   `-- codegen.c     Assembly generator
 |-- examples/         Source examples and reference assembly
 |   |-- sample.c
@@ -66,7 +68,7 @@ On Windows with MinGW GCC and no `make`, run:
 
 ```powershell
 New-Item -ItemType Directory -Force build
-gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\lexer.c src\parser.c src\semantic.c src\type.c src\codegen.c
+gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\lexer.c src\parser.c src\semantic.c src\type.c src\symbol.c src\codegen.c
 ```
 
 ## Test
@@ -208,6 +210,8 @@ Supported expression features:
   with `pts[i].field` access
 - Arrays of any supported element type, packed at the element's real size:
   `char letters[4]` occupies 4 bytes and indexes by 1
+- Nested blocks, with shadowing: an inner declaration hides an outer one of
+  the same name
 - Multiple statements inside a function body
 - Multiple integer-returning functions per input file
 - Function parameters: `int helper(int x, int y)`
@@ -248,6 +252,13 @@ Types are represented by a `Type` tree (`include/type.h`) that knows its own
 size and alignment. Semantic analysis resolves each declaration and expression
 to a type, and the code generator reads those types for storage sizes, struct
 field offsets, array strides, pointer arithmetic scaling, and `sizeof`.
+
+Semantic analysis also gives every declaration a `Symbol` (`include/symbol.h`)
+holding its storage location, and attaches it to the AST along with the frame
+size each function needs. The code generator keeps no symbol table of its own
+and never resolves a name: it reads storage straight off the annotated tree.
+Because identity lives in the symbol rather than the name, a variable can
+shadow an outer one, and disjoint blocks reuse the same stack slots.
 
 Expressions use C-style integer promotions and usual arithmetic conversions.
 Assignments, arguments, and return values are converted to their destination
@@ -294,8 +305,6 @@ This removes the `build/` directory.
 
 ## Current Limitations
 
-- Nested blocks have lexical visibility, but variable shadowing is rejected
-  until the code generator assigns symbols unique storage identities
 - Global initializers must be constant expressions
 - Arrays cannot be assigned as whole values
 - Struct support does not include nested structs or struct parameters yet

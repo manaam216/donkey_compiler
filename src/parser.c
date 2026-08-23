@@ -1148,7 +1148,12 @@ struct ast_node* create_ast_node(ASTNodeType type, char *value, struct ast_node 
 
 struct ast_node* create_ast_node_at(ASTNodeType type, char *value, struct ast_node *left, struct ast_node *right, SourceLocation location)
 {
-    struct ast_node *node = malloc(sizeof(struct ast_node));
+    /*
+     * calloc, not malloc: fields the parser does not set (the resolved type and
+     * symbol, both filled in later by semantic analysis) must start NULL rather
+     * than holding whatever was on the heap.
+     */
+    struct ast_node *node = calloc(1, sizeof(struct ast_node));
     if (!node) {
         perror("Error allocating AST node");
         exit(EXIT_FAILURE);
@@ -1160,6 +1165,8 @@ struct ast_node* create_ast_node_at(ASTNodeType type, char *value, struct ast_no
     node->array_length = 0;
     node->string_label = 0;
     node->struct_name = NULL;
+    node->ty = NULL;
+    node->sym = NULL;
     node->location = location;
     node->value = value ? strdup(value) : NULL;
     node->left = left;

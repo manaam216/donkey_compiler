@@ -5,9 +5,11 @@
 #include "defs.h"
 #include "decl.h"
 #include "type.h"
+#include "symbol.h"
 
 struct global_symbol {
     const char *name;
+    struct Symbol *sym;
     int is_function;
     CType type;
     int pointer_depth;
@@ -25,6 +27,7 @@ struct local_symbol {
     int array_length;
     const char *struct_name;
     int depth;
+    struct Symbol *sym;
 };
 
 struct struct_field {
@@ -63,6 +66,15 @@ struct sema_ctx {
     int scope_depth;
     int loop_depth;
     int error_count;
+
+    /*
+     * Stack layout for the function being analysed. frame_offset is the bytes
+     * used by the enclosing scopes; leaving a scope rewinds it so disjoint
+     * blocks reuse the same slots. frame_max is the high-water mark, which is
+     * what the function actually needs to reserve.
+     */
+    int frame_offset;
+    int frame_max;
 
     const char *current_function;
     CType current_return_type;
@@ -351,6 +363,10 @@ static void add_global(struct sema_ctx *ctx, struct ast_node *node)
     }
 
     node->ty = resolve_type(ctx, node);
+    if (!node->sym) {
+        node->sym = sym_new(name, is_function ? SYM_FUNCTION : SYM_GLOBAL, node->ty);
+    }
+    ctx->globals[ctx->global_count].sym = node->sym;
     ctx->globals[ctx->global_count].name = name;
     ctx->globals[ctx->global_count].is_function = is_function;
     ctx->globals[ctx->global_count].type = node->data_type;
@@ -379,12 +395,15 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
     const char *name = node->value;
     int existing = find_local(ctx, name);
 
-    if (existing >= 0) {
-        if (ctx->locals[existing].depth == ctx->scope_depth) {
-            semantic_error_at(ctx, node, "duplicate declaration of '%s'", name);
-        } else {
-            semantic_error_at(ctx, node, "variable shadowing is not supported for '%s'", name);
-        }
+    /*
+     * Redeclaring a name in the same scope is an error; redeclaring it in an
+     * inner scope shadows the outer one. Shadowing works because each
+     * declaration now gets its own Symbol, so the two variables have distinct
+     * storage even though they share a name. find_local scans innermost-first,
+     * so references resolve to the nearest declaration.
+     */
+    if (existing >= 0 && ctx->locals[existing].depth == ctx->scope_depth) {
+        semantic_error_at(ctx, node, "duplicate declaration of '%s'", name);
         return;
     }
     ensure_capacity((void **)&ctx->locals, ctx->local_count,
@@ -395,6 +414,20 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
     }
 
     node->ty = resolve_type(ctx, node);
+    if (!node->sym) {
+        struct Type *resolved = resolve_type(ctx, node);
+        int size = resolved->size > 0 ? resolved->size : 4;
+
+        node->sym = sym_new(name, SYM_LOCAL, resolved);
+        /* Slots stay 4-byte aligned; the frame grows downward from %ebp. */
+        ctx->frame_offset += (size + 3) / 4 * 4;
+        node->sym->offset = -ctx->frame_offset;
+        if (ctx->frame_offset > ctx->frame_max) {
+            ctx->frame_max = ctx->frame_offset;
+        }
+    }
+
+    ctx->locals[ctx->local_count].sym = node->sym;
     ctx->locals[ctx->local_count].name = name;
     ctx->locals[ctx->local_count].type = type;
     ctx->locals[ctx->local_count].pointer_depth = node->pointer_depth;
@@ -404,16 +437,48 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
     ctx->local_count++;
 }
 
+/*
+ * Parameters are already on the stack when the function is entered, above the
+ * saved frame pointer and return address, so they get positive offsets and do
+ * not consume frame space.
+ */
+static void add_parameter(struct sema_ctx *ctx, struct ast_node *node, int index)
+{
+    if (!node->sym) {
+        node->sym = sym_new(node->value, SYM_PARAM, resolve_type(ctx, node));
+        node->sym->offset = 8 + (index * 4);
+    }
+    add_local(ctx, node, node->data_type);
+}
+
 static void enter_scope(struct sema_ctx *ctx)
 {
     ctx->scope_depth++;
 }
 
+
 static void leave_scope(struct sema_ctx *ctx)
 {
+    int i;
+
     while (ctx->local_count > 0 && ctx->locals[ctx->local_count - 1].depth == ctx->scope_depth) {
         ctx->local_count--;
     }
+
+    /*
+     * Rewind the frame to what the still-live locals occupy, so two disjoint
+     * blocks reuse the same stack slots instead of each claiming their own.
+     * frame_max already recorded the deepest point reached.
+     */
+    ctx->frame_offset = 0;
+    for (i = 0; i < ctx->local_count; i++) {
+        struct Symbol *sym = ctx->locals[i].sym;
+
+        if (sym && sym->kind == SYM_LOCAL && -sym->offset > ctx->frame_offset) {
+            ctx->frame_offset = -sym->offset;
+        }
+    }
+
     ctx->scope_depth--;
 }
 
@@ -659,17 +724,26 @@ static void analyze_top_level(struct sema_ctx *ctx, struct ast_node *node)
     } else if (node->type == AST_STRUCT_DEF) {
         return;
     } else if (node->type == AST_FUNCTION) {
+        int param_index = 0;
+
         ctx->current_function = node->value;
         ctx->local_count = 0;
         ctx->scope_depth = 1;
         ctx->loop_depth = 0;
+        ctx->frame_offset = 0;
+        ctx->frame_max = 0;
 
         for (param = node->left; param; param = param->right) {
             if (param->type == AST_PARAM_LIST) {
-                add_local(ctx, param->left, param->left->data_type);
+                add_parameter(ctx, param->left, param_index++);
             }
         }
         analyze_block(ctx, node->right, 0);
+
+        /* The frame the code generator must reserve for this function. */
+        if (node->sym) {
+            node->sym->frame_size = ctx->frame_max;
+        }
         ctx->current_function = NULL;
     }
 }
@@ -816,6 +890,7 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
             local = find_local(ctx, node->value);
             global = find_global(ctx, node->value);
             if (local >= 0) {
+                node->sym = ctx->locals[local].sym;
                 node->data_type = ctx->locals[local].type;
                 node->pointer_depth = ctx->locals[local].pointer_depth;
                 node->array_length = ctx->locals[local].array_length;
@@ -823,6 +898,7 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
                 return node->data_type;
             }
             if (global >= 0 && !ctx->globals[global].is_function) {
+                node->sym = ctx->globals[global].sym;
                 node->pointer_depth = ctx->globals[global].pointer_depth;
                 node->array_length = ctx->globals[global].array_length;
                 node->struct_name = ctx->globals[global].struct_name ? strdup(ctx->globals[global].struct_name) : NULL;
@@ -1141,8 +1217,9 @@ static void check_top_level_types(struct sema_ctx *ctx, struct ast_node *node)
         ctx->current_return_pointer_depth = node->pointer_depth;
         ctx->local_count = 0;
         ctx->scope_depth = 1;
+        ctx->frame_offset = 0;
         for (param = node->left; param; param = param->right)
-            add_local(ctx, param->left, param->left->data_type);
+            add_parameter(ctx, param->left, 0);
         if (node->right) check_statement_types(ctx, node->right->left);
     }
 }
