@@ -1,20 +1,20 @@
-.globl _main
-_main:
-    push    %ebp
-    movl    %esp, %ebp
-    subl    $4, %esp
+.globl main
+main:
+    pushq   %rbp
+    movq    %rsp, %rbp
+    subq    $16, %rsp
     movl    $1, %eax
-    movl    %eax, -4(%ebp)
-    movl    -4(%ebp), %eax
+    movl    %eax, -4(%rbp)
+    movl    -4(%rbp), %eax
     cmpl    $0, %eax
     jne     .L1
     movl    $10, %eax
-    push    %eax
+    pushq   %rax
     movl    $0, %eax
-    pop     %edx
-    push    %eax
+    popq    %rdx
+    pushq   %rax
     movl    %edx, %eax
-    pop     %ecx
+    popq    %rcx
     cdq
     idivl   %ecx
     cmpl    $0, %eax

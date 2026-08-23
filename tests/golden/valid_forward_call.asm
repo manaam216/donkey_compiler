@@ -1,24 +1,27 @@
-.globl _main
-_main:
-    push    %ebp
-    movl    %esp, %ebp
+.globl main
+main:
+    pushq   %rbp
+    movq    %rsp, %rbp
     movl    $3, %eax
-    push    %eax
-    call    _add_two
-    addl    $4, %esp
+    pushq   %rax
+    popq    %rdi
+    movl    $0, %eax
+    call    add_two
     jmp     .L0
     movl    $0, %eax
 .L0:
     leave
     ret
-.globl _add_two
-_add_two:
-    push    %ebp
-    movl    %esp, %ebp
-    movl    8(%ebp), %eax
-    push    %eax
+.globl add_two
+add_two:
+    pushq   %rbp
+    movq    %rsp, %rbp
+    subq    $16, %rsp
+    movl    %edi, -4(%rbp)
+    movl    -4(%rbp), %eax
+    pushq   %rax
     movl    $2, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
     jmp     .L1
     movl    $0, %eax

@@ -1,17 +1,19 @@
-.globl _choose
-_choose:
-    push    %ebp
-    movl    %esp, %ebp
-    movl    8(%ebp), %eax
-    push    %eax
+.globl choose
+choose:
+    pushq   %rbp
+    movq    %rsp, %rbp
+    subq    $16, %rsp
+    movl    %edi, -4(%rbp)
+    movl    -4(%rbp), %eax
+    pushq   %rax
     movl    $5, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     setg    %al
     cmpl    $0, %eax
     je      .L1
-    movl    8(%ebp), %eax
+    movl    -4(%rbp), %eax
     jmp     .L0
     jmp     .L2
 .L1:
@@ -22,39 +24,39 @@ _choose:
 .L0:
     leave
     ret
-.globl _main
-_main:
-    push    %ebp
-    movl    %esp, %ebp
-    subl    $12, %esp
+.globl main
+main:
+    pushq   %rbp
+    movq    %rsp, %rbp
+    subq    $16, %rsp
     movl    $0, %eax
-    movl    %eax, -4(%ebp)
+    movl    %eax, -4(%rbp)
     movl    $0, %eax
-    movl    %eax, -8(%ebp)
+    movl    %eax, -8(%rbp)
 .L4:
-    movl    -4(%ebp), %eax
-    push    %eax
+    movl    -4(%rbp), %eax
+    pushq   %rax
     movl    $5, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     setl    %al
     cmpl    $0, %eax
     je      .L5
-    movl    -4(%ebp), %eax
-    push    %eax
+    movl    -4(%rbp), %eax
+    pushq   %rax
     movl    $1, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -4(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -4(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -4(%ebp), %eax
-    push    %eax
+    movl    -4(%rbp), %eax
+    pushq   %rax
     movl    $3, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     sete    %al
@@ -64,34 +66,34 @@ _main:
     jmp     .L7
 .L6:
 .L7:
-    movl    -8(%ebp), %eax
-    push    %eax
-    movl    -4(%ebp), %eax
-    pop     %edx
+    movl    -8(%rbp), %eax
+    pushq   %rax
+    movl    -4(%rbp), %eax
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -8(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -8(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
     jmp     .L4
 .L5:
     movl    $0, %eax
-    movl    %eax, -12(%ebp)
+    movl    %eax, -12(%rbp)
 .L8:
-    movl    -12(%ebp), %eax
-    push    %eax
+    movl    -12(%rbp), %eax
+    pushq   %rax
     movl    $5, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     setl    %al
     cmpl    $0, %eax
     je      .L10
-    movl    -12(%ebp), %eax
-    push    %eax
+    movl    -12(%rbp), %eax
+    pushq   %rax
     movl    $4, %eax
-    pop     %edx
+    popq    %rdx
     cmpl    %eax, %edx
     movl    $0, %eax
     sete    %al
@@ -101,33 +103,34 @@ _main:
     jmp     .L12
 .L11:
 .L12:
-    movl    -8(%ebp), %eax
-    push    %eax
+    movl    -8(%rbp), %eax
+    pushq   %rax
     movl    $1, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -8(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -8(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
 .L9:
-    movl    -12(%ebp), %eax
-    push    %eax
+    movl    -12(%rbp), %eax
+    pushq   %rax
     movl    $1, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
     jmp     .L8
 .L10:
-    movl    -8(%ebp), %eax
-    push    %eax
-    call    _choose
-    addl    $4, %esp
+    movl    -8(%rbp), %eax
+    pushq   %rax
+    popq    %rdi
+    movl    $0, %eax
+    call    choose
     jmp     .L3
     movl    $0, %eax
 .L3:

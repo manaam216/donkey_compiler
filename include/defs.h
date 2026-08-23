@@ -171,6 +171,14 @@ struct ast_node {
      */
     struct Type *ty;
 
+    /*
+     * Storage identity, filled in by semantic analysis. On declarations and
+     * identifier references this is the variable's symbol; on functions and
+     * calls it is the function's. The code generator reads offsets from here
+     * rather than resolving names a second time.
+     */
+    struct Symbol *sym;
+
     int string_label;
     SourceLocation location;
     struct ast_node *left;

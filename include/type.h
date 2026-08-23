@@ -13,9 +13,8 @@
  * A Type knows its own size and alignment, so layout and scaling are computed
  * rather than assumed.
  *
- * Sizes below are for the current 32-bit x86 target, where long is 4 bytes and
- * pointers are 4 bytes. Moving to x86-64 changes these constants and nothing
- * else.
+ * Sizes below are for the x86-64 System V target (LP64): long and pointers are
+ * both 8 bytes. Retargeting changes these constants and nothing else.
  */
 
 typedef enum {

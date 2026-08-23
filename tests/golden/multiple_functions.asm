@@ -1,50 +1,54 @@
-.globl _helper
-_helper:
-    push    %ebp
-    movl    %esp, %ebp
-    subl    $4, %esp
+.globl helper
+helper:
+    pushq   %rbp
+    movq    %rsp, %rbp
+    subq    $16, %rsp
+    movl    %edi, -4(%rbp)
+    movl    %esi, -8(%rbp)
     movl    $2, %eax
-    movl    %eax, -4(%ebp)
-    movl    8(%ebp), %eax
-    push    %eax
-    movl    12(%ebp), %eax
-    pop     %edx
+    movl    %eax, -12(%rbp)
+    movl    -4(%rbp), %eax
+    pushq   %rax
+    movl    -8(%rbp), %eax
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    movl    -4(%ebp), %eax
-    pop     %edx
+    pushq   %rax
+    movl    -12(%rbp), %eax
+    popq    %rdx
     addl    %edx, %eax
     jmp     .L0
     movl    $0, %eax
 .L0:
     leave
     ret
-.globl _unused
-_unused:
-    push    %ebp
-    movl    %esp, %ebp
+.globl unused
+unused:
+    pushq   %rbp
+    movq    %rsp, %rbp
     movl    $99, %eax
     jmp     .L1
     movl    $0, %eax
 .L1:
     leave
     ret
-.globl _main
-_main:
-    push    %ebp
-    movl    %esp, %ebp
-    subl    $4, %esp
+.globl main
+main:
+    pushq   %rbp
+    movq    %rsp, %rbp
+    subq    $16, %rsp
     movl    $7, %eax
-    movl    %eax, -4(%ebp)
+    movl    %eax, -4(%rbp)
     movl    $4, %eax
-    push    %eax
-    movl    -4(%ebp), %eax
-    push    %eax
-    call    _helper
-    addl    $8, %esp
-    push    %eax
+    pushq   %rax
+    movl    -4(%rbp), %eax
+    pushq   %rax
+    popq    %rdi
+    popq    %rsi
+    movl    $0, %eax
+    call    helper
+    pushq   %rax
     movl    $3, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
     jmp     .L2
     movl    $0, %eax

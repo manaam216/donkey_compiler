@@ -5,30 +5,24 @@
 #include "defs.h"
 #include "decl.h"
 #include "type.h"
+#include "symbol.h"
+#include "diag.h"
 
-static struct {
-    char *name;
-    int offset;
-    int array_length;
-    char *struct_name;
-    struct Type *ty;
-} symbols[256];
 static struct {
     char *name;
     int array_length;
     struct Type *ty;
     int values[256];
 } globals[256];
-static int symbol_count = 0;
 static int global_count = 0;
-static int local_stack_count = 0;
 
 /*
  * Emitter state: label numbering, the active function's exit label, the
- * break/continue label stacks, and interned string literals. The symbol,
- * struct, and global tables above stay file-scope for now -- they duplicate
- * work semantic analysis already did and are slated for removal once codegen
- * reads its symbols from the annotated AST instead.
+ * break/continue label stacks, and interned string literals.
+ *
+ * Codegen no longer keeps a symbol table. Storage locations, types, and frame
+ * sizes are read from the symbols semantic analysis attached to the AST. The
+ * globals array above remains only as the list of static data to emit.
  */
 struct cg_string {
     char *value;
@@ -75,28 +69,7 @@ static void generate_function(struct cg_ctx *ctx, struct ast_node *node, FILE *o
 static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
 static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
 static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
-
-static int find_local(const char *name)
-{
-    for (int i = 0; i < symbol_count; i++) {
-        if (strcmp(symbols[i].name, name) == 0) {
-            return i;
-        }
-    }
-
-    return -1;
-}
-
-static int local_offset(const char *name)
-{
-    int index = find_local(name);
-    if (index < 0) {
-        fprintf(stderr, "Use of undeclared identifier '%s'\n", name);
-        exit(1);
-    }
-
-    return symbols[index].offset;
-}
+static int count_args(struct ast_node *node);
 
 static int find_global(const char *name)
 {
@@ -107,30 +80,6 @@ static int find_global(const char *name)
     }
 
     return -1;
-}
-
-static void add_symbol(const char *name, int offset, struct Type *ty)
-{
-    if (!name) {
-        return;
-    }
-
-    if (find_local(name) >= 0) {
-        fprintf(stderr, "Redeclaration of local variable '%s'\n", name);
-        exit(1);
-    }
-
-    if (symbol_count >= 256) {
-        fprintf(stderr, "Too many local variables or parameters\n");
-        exit(1);
-    }
-
-    symbols[symbol_count].name = strdup(name);
-    symbols[symbol_count].offset = offset;
-    symbols[symbol_count].array_length = 0;
-    symbols[symbol_count].struct_name = NULL;
-    symbols[symbol_count].ty = ty;
-    symbol_count++;
 }
 
 static int struct_field_offset(struct Type *ty, const char *field_name)
@@ -162,23 +111,26 @@ static void add_global_node(struct ast_node *node)
     }
 
     if (find_global(node->value) >= 0) {
-        fprintf(stderr, "Redeclaration of global variable '%s'\n", node->value);
-        exit(1);
+        diag_at(DIAG_ERROR, node->location,
+            "redeclaration of global variable '%s'", node->value);
+        return;
     }
 
     if (global_count >= 256) {
-        fprintf(stderr, "Too many global variables\n");
-        exit(1);
+        diag_at(DIAG_ERROR, node->location,
+            "too many global variables (limit is 256)");
+        return;
     }
 
     if (node->array_length > 256) {
-        fprintf(stderr, "Global array '%s' exceeds the supported length of 256\n",
-            node->value);
-        exit(1);
+        diag_at(DIAG_ERROR, node->location,
+            "global array '%s' exceeds the supported length of 256", node->value);
+        return;
     }
 
     globals[global_count].name = strdup(node->value);
     globals[global_count].array_length = node->array_length;
+    globals[global_count].ty = node->ty;
     for (i = 0; i < 256; i++) {
         globals[global_count].values[i] = 0;
     }
@@ -193,102 +145,42 @@ static void add_global_node(struct ast_node *node)
     global_count++;
 }
 
-static void add_param(struct ast_node *node, int index)
-{
-    add_symbol(node->value, 8 + (index * 4), node->ty);
-}
-
-static void add_local_node(struct ast_node *node)
-{
-    /* Stack slots stay 4 bytes wide; round the type's size up to fill them. */
-    int size = node->ty ? node->ty->size : 4;
-    int slots = (size + 3) / 4;
-
-    if (slots < 1) {
-        slots = 1;
-    }
-
-    local_stack_count += slots;
-    add_symbol(node->value, -4 * local_stack_count, node->ty);
-    symbols[symbol_count - 1].array_length = node->array_length;
-    symbols[symbol_count - 1].struct_name = node->struct_name ? strdup(node->struct_name) : NULL;
-}
-
-static int collect_params(struct ast_node *node, int index)
-{
-    if (!node) {
-        return index;
-    }
-
-    if (node->type != AST_PARAM_LIST) {
-        fprintf(stderr, "Unsupported parameter node type: %d\n", node->type);
-        exit(1);
-    }
-
-    add_param(node->left, index);
-    return collect_params(node->right, index + 1);
-}
-
-static void collect_locals(struct ast_node *node)
-{
-    if (!node) {
-        return;
-    }
-
-    if (node->type == AST_DECL) {
-        add_local_node(node);
-    }
-
-    collect_locals(node->left);
-    collect_locals(node->right);
-}
-
-static void free_locals(void)
-{
-    for (int i = 0; i < symbol_count; i++) {
-        free(symbols[i].name);
-        symbols[i].name = NULL;
-        symbols[i].offset = 0;
-        symbols[i].array_length = 0;
-        free(symbols[i].struct_name);
-        symbols[i].struct_name = NULL;
-    }
-    symbol_count = 0;
-    local_stack_count = 0;
-}
-
 /*
- * Indirect access must match the element width. Using a 4-byte movl for a
- * char element would read past it and, on a store, clobber the three
- * neighbouring elements -- harmless while every type occupied its own 4-byte
- * slot, but wrong now that arrays are packed at their true element size.
+ * Access width follows the type. A 4-byte movl for a char element would read
+ * past it and, on a store, clobber its neighbours; an 8-byte pointer or long
+ * needs movq. Values live in %rax, so 4-byte and narrower loads name %eax and
+ * let the hardware zero the upper half.
  */
 static void emit_load_indirect(struct Type *ty, FILE *output)
 {
     int size = ty ? ty->size : 4;
 
     if (size == 1) {
-        fprintf(output, "    %s  (%%eax), %%eax\n",
+        fprintf(output, "    %s  (%%rax), %%eax\n",
             ty && ty->is_unsigned ? "movzbl" : "movsbl");
     } else if (size == 2) {
-        fprintf(output, "    %s  (%%eax), %%eax\n",
+        fprintf(output, "    %s  (%%rax), %%eax\n",
             ty && ty->is_unsigned ? "movzwl" : "movswl");
+    } else if (size == 8) {
+        fprintf(output, "    movq    (%%rax), %%rax\n");
     } else {
-        fprintf(output, "    movl    (%%eax), %%eax\n");
+        fprintf(output, "    movl    (%%rax), %%eax\n");
     }
 }
 
-/* Store %eax into a frame slot at the given offset, using the type's width. */
+/* Store the accumulator into a frame slot, using the type's width. */
 static void emit_store_offset(struct Type *ty, int offset, FILE *output)
 {
     int size = ty ? ty->size : 4;
 
     if (size == 1) {
-        fprintf(output, "    movb    %%al, %d(%%ebp)\n", offset);
+        fprintf(output, "    movb    %%al, %d(%%rbp)\n", offset);
     } else if (size == 2) {
-        fprintf(output, "    movw    %%ax, %d(%%ebp)\n", offset);
+        fprintf(output, "    movw    %%ax, %d(%%rbp)\n", offset);
+    } else if (size == 8) {
+        fprintf(output, "    movq    %%rax, %d(%%rbp)\n", offset);
     } else {
-        fprintf(output, "    movl    %%eax, %d(%%ebp)\n", offset);
+        fprintf(output, "    movl    %%eax, %d(%%rbp)\n", offset);
     }
 }
 
@@ -297,26 +189,132 @@ static void emit_zero_offset(struct Type *ty, int offset, FILE *output)
     int size = ty ? ty->size : 4;
 
     if (size == 1) {
-        fprintf(output, "    movb    $0, %d(%%ebp)\n", offset);
+        fprintf(output, "    movb    $0, %d(%%rbp)\n", offset);
     } else if (size == 2) {
-        fprintf(output, "    movw    $0, %d(%%ebp)\n", offset);
+        fprintf(output, "    movw    $0, %d(%%rbp)\n", offset);
+    } else if (size == 8) {
+        fprintf(output, "    movq    $0, %d(%%rbp)\n", offset);
     } else {
-        fprintf(output, "    movl    $0, %d(%%ebp)\n", offset);
+        fprintf(output, "    movl    $0, %d(%%rbp)\n", offset);
     }
 }
 
-/* Address in %eax, value in %edx. */
+/* Address in %rax, value in %rdx. */
 static void emit_store_indirect(struct Type *ty, FILE *output)
 {
     int size = ty ? ty->size : 4;
 
     if (size == 1) {
-        fprintf(output, "    movb    %%dl, (%%eax)\n");
+        fprintf(output, "    movb    %%dl, (%%rax)\n");
     } else if (size == 2) {
-        fprintf(output, "    movw    %%dx, (%%eax)\n");
+        fprintf(output, "    movw    %%dx, (%%rax)\n");
+    } else if (size == 8) {
+        fprintf(output, "    movq    %%rdx, (%%rax)\n");
     } else {
-        fprintf(output, "    movl    %%edx, (%%eax)\n");
+        fprintf(output, "    movl    %%edx, (%%rax)\n");
     }
+}
+
+/*
+ * A scalar local owns a whole slot -- at least a word, eight bytes for a
+ * pointer or long -- and is read back at that width, so writes must fill it.
+ * The narrow stores above are only for packed array elements.
+ */
+static void emit_store_slot(struct Type *ty, int offset, FILE *output)
+{
+    if (ty && ty->size == 8) {
+        fprintf(output, "    movq    %%rax, %d(%%rbp)\n", offset);
+    } else {
+        fprintf(output, "    movl    %%eax, %d(%%rbp)\n", offset);
+    }
+}
+
+static void emit_zero_slot(struct Type *ty, int offset, FILE *output)
+{
+    if (ty && ty->size == 8) {
+        fprintf(output, "    movq    $0, %d(%%rbp)\n", offset);
+    } else {
+        fprintf(output, "    movl    $0, %d(%%rbp)\n", offset);
+    }
+}
+
+/* Load a frame slot into the accumulator at the type's width. */
+static void emit_load_frame(struct Type *ty, int offset, FILE *output)
+{
+    int size = ty ? ty->size : 4;
+
+    if (size == 1) {
+        fprintf(output, "    %s  %d(%%rbp), %%eax\n",
+            ty && ty->is_unsigned ? "movzbl" : "movsbl", offset);
+    } else if (size == 2) {
+        fprintf(output, "    %s  %d(%%rbp), %%eax\n",
+            ty && ty->is_unsigned ? "movzwl" : "movswl", offset);
+    } else if (size == 8) {
+        fprintf(output, "    movq    %d(%%rbp), %%rax\n", offset);
+    } else {
+        fprintf(output, "    movl    %d(%%rbp), %%eax\n", offset);
+    }
+}
+
+static void emit_load_global(struct Type *ty, const char *name, FILE *output)
+{
+    int size = ty ? ty->size : 4;
+
+    if (size == 1) {
+        fprintf(output, "    %s  %s(%%rip), %%eax\n",
+            ty && ty->is_unsigned ? "movzbl" : "movsbl", name);
+    } else if (size == 2) {
+        fprintf(output, "    %s  %s(%%rip), %%eax\n",
+            ty && ty->is_unsigned ? "movzwl" : "movswl", name);
+    } else if (size == 8) {
+        fprintf(output, "    movq    %s(%%rip), %%rax\n", name);
+    } else {
+        fprintf(output, "    movl    %s(%%rip), %%eax\n", name);
+    }
+}
+
+static void emit_store_global(struct Type *ty, const char *name, FILE *output)
+{
+    int size = ty ? ty->size : 4;
+
+    if (size == 1) {
+        fprintf(output, "    movb    %%al, %s(%%rip)\n", name);
+    } else if (size == 2) {
+        fprintf(output, "    movw    %%ax, %s(%%rip)\n", name);
+    } else if (size == 8) {
+        fprintf(output, "    movq    %%rax, %s(%%rip)\n", name);
+    } else {
+        fprintf(output, "    movl    %%eax, %s(%%rip)\n", name);
+    }
+}
+
+/*
+ * ++ and -- step a pointer by one element and everything else by one. On a
+ * pointer the step is 64-bit address arithmetic, and the element size comes
+ * from the type rather than being assumed to be a word.
+ */
+static void emit_step(struct Type *ty, int is_increment, FILE *output)
+{
+    int pointer = ty && ty->kind == TY_PTR;
+    int step = pointer ? ty_element_size(ty) : 1;
+
+    if (pointer) {
+        fprintf(output, "    %s    $%d, %%rax\n", is_increment ? "addq" : "subq", step);
+    } else {
+        fprintf(output, "    %s    $%d, %%eax\n", is_increment ? "addl" : "subl", step);
+    }
+}
+
+/* Compare the two operands at the wider of their widths. */
+static void emit_compare(struct Type *left, struct Type *right, FILE *output)
+{
+    int size = 4;
+
+    if (left && left->size > size) size = left->size;
+    if (right && right->size > size) size = right->size;
+
+    fprintf(output, size == 8 ? "    cmpq    %%rax, %%rdx\n"
+                              : "    cmpl    %%eax, %%edx\n");
 }
 
 static void generate_epilogue(FILE *output)
@@ -325,66 +323,61 @@ static void generate_epilogue(FILE *output)
     fprintf(output, "    ret\n");
 }
 
-static void generate_identifier_load(const char *name, FILE *output)
+/*
+ * Storage comes straight off the symbol semantic analysis attached to the
+ * node. There is no name lookup here any more, so an unresolved name cannot
+ * reach the code generator: it is prevented by construction rather than by a
+ * runtime check.
+ */
+static int is_frame_symbol(struct Symbol *sym)
 {
-    int local_index = find_local(name);
-    if (local_index >= 0) {
-        if (symbols[local_index].array_length > 0) {
-            fprintf(output, "    leal    %d(%%ebp), %%eax\n", symbols[local_index].offset);
-            return;
-        }
-        fprintf(output, "    movl    %d(%%ebp), %%eax\n", symbols[local_index].offset);
-        return;
-    }
-
-    if (find_global(name) >= 0) {
-        int global_index = find_global(name);
-        if (globals[global_index].array_length > 0) {
-            fprintf(output, "    movl    $_%s, %%eax\n", name);
-            return;
-        }
-        fprintf(output, "    movl    _%s, %%eax\n", name);
-        return;
-    }
-
-    fprintf(stderr, "Use of undeclared identifier '%s'\n", name);
-    exit(1);
+    return sym->kind == SYM_LOCAL || sym->kind == SYM_PARAM;
 }
 
-static void generate_identifier_store(const char *name, FILE *output)
+static void generate_identifier_load(struct ast_node *node, FILE *output)
 {
-    int local_index = find_local(name);
-    if (local_index >= 0) {
-        fprintf(output, "    movl    %%eax, %d(%%ebp)\n", symbols[local_index].offset);
+    struct Symbol *sym = node->sym;
+    int is_array = sym->ty && sym->ty->kind == TY_ARRAY;
+
+    if (is_frame_symbol(sym)) {
+        /* An array's value is its address; anything else is loaded. */
+        if (is_array) {
+            fprintf(output, "    leaq    %d(%%rbp), %%rax\n", sym->offset);
+        } else {
+            emit_load_frame(sym->ty, sym->offset, output);
+        }
         return;
     }
 
-    if (find_global(name) >= 0) {
-        fprintf(output, "    movl    %%eax, _%s\n", name);
+    if (is_array) {
+        fprintf(output, "    leaq    %s(%%rip), %%rax\n", sym->name);
+    } else {
+        emit_load_global(sym->ty, sym->name, output);
+    }
+}
+
+static void generate_identifier_store(struct ast_node *node, FILE *output)
+{
+    struct Symbol *sym = node->sym;
+
+    if (is_frame_symbol(sym)) {
+        emit_store_slot(sym->ty, sym->offset, output);
         return;
     }
 
-    fprintf(stderr, "Use of undeclared identifier '%s'\n", name);
-    exit(1);
+    emit_store_global(sym->ty, sym->name, output);
 }
 
 static void generate_lvalue_address(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
-    int local_index;
-
     switch (node->type) {
         case AST_IDENTIFIER:
-            local_index = find_local(node->value);
-            if (local_index >= 0) {
-                fprintf(output, "    leal    %d(%%ebp), %%eax\n", symbols[local_index].offset);
-                return;
+            if (is_frame_symbol(node->sym)) {
+                fprintf(output, "    leaq    %d(%%rbp), %%rax\n", node->sym->offset);
+            } else {
+                fprintf(output, "    leaq    %s(%%rip), %%rax\n", node->sym->name);
             }
-            if (find_global(node->value) >= 0) {
-                fprintf(output, "    movl    $_%s, %%eax\n", node->value);
-                return;
-            }
-            fprintf(stderr, "Use of undeclared identifier '%s'\n", node->value);
-            exit(1);
+            return;
         case AST_DEREFERENCE:
             generate_exp(ctx, node->left, output);
             return;
@@ -394,21 +387,26 @@ static void generate_lvalue_address(struct cg_ctx *ctx, struct ast_node *node, F
             } else {
                 generate_exp(ctx, node->left, output);
             }
-            fprintf(output, "    push    %%eax\n");
+            fprintf(output, "    pushq   %%rax\n");
             generate_exp(ctx, node->right, output);
-            fprintf(output, "    imull   $%d, %%eax\n",
+            /*
+             * Widen the index before scaling: addresses are 64-bit, and a
+             * 32-bit add would truncate a stack address to garbage.
+             */
+            fprintf(output, "    cltq\n");
+            fprintf(output, "    imulq   $%d, %%rax\n",
                 ty_element_size(node->left->ty));
-            fprintf(output, "    pop     %%edx\n");
-            fprintf(output, "    addl    %%edx, %%eax\n");
+            fprintf(output, "    popq    %%rdx\n");
+            fprintf(output, "    addq    %%rdx, %%rax\n");
             return;
         case AST_FIELD_ACCESS:
             generate_lvalue_address(ctx, node->left, output);
-            fprintf(output, "    addl    $%d, %%eax\n",
+            /* Adding to an address: 64-bit, or the pointer is truncated. */
+            fprintf(output, "    addq    $%d, %%rax\n",
                 struct_field_offset(node->left->ty, node->value));
             return;
         default:
-            fprintf(stderr, "Expression is not assignable\n");
-            exit(1);
+            diag_internal(node->location, "expression is not assignable");
     }
 }
 
@@ -463,6 +461,15 @@ static void generate_cast(const char *type, FILE *output)
         fprintf(output, "    movswl  %%ax, %%eax\n");
     } else if (strcmp(type, "ushort") == 0) {
         fprintf(output, "    movzwl  %%ax, %%eax\n");
+    } else if (strcmp(type, "long") == 0) {
+        /*
+         * Widening to 8 bytes: values are computed in %eax, so the upper half
+         * of %rax is undefined until it is extended explicitly.
+         */
+        fprintf(output, "    cltq\n");
+    } else if (strcmp(type, "ulong") == 0) {
+        /* Writing %eax zeroes the upper half of %rax. */
+        fprintf(output, "    movl    %%eax, %%eax\n");
     }
 }
 
@@ -571,8 +578,9 @@ static int eval_const_exp(struct ast_node *node)
         case AST_CAST:
             return cast_constant(eval_const_exp(node->left), node->value);
         default:
-            fprintf(stderr, "Global initializer must be a constant expression\n");
-            exit(1);
+            diag_internal(node->location,
+                "global initializer is not a constant expression");
+            return 0;   /* not reached: diag_internal exits */
     }
 }
 
@@ -631,11 +639,31 @@ static void generate_globals(struct cg_ctx *ctx, FILE *output)
 
     fprintf(output, ".data\n");
     for (int i = 0; i < global_count; i++) {
-        fprintf(output, ".globl _%s\n", globals[i].name);
-        fprintf(output, "_%s:\n", globals[i].name);
+        /* Element width follows the type, so a char array is bytes, not words. */
+        struct Type *ty = globals[i].ty;
+        struct Type *element = ty && ty->kind == TY_ARRAY ? ty->base : ty;
+        int element_size = element ? element->size : 4;
         int count = globals[i].array_length > 0 ? globals[i].array_length : 1;
+        int alignment = element ? element->align : 4;
+
+        fprintf(output, "    .align  %d\n", alignment);
+        fprintf(output, ".globl %s\n", globals[i].name);
+        fprintf(output, "%s:\n", globals[i].name);
         for (int j = 0; j < count; j++) {
-            fprintf(output, "    .long   %d\n", globals[i].values[j]);
+            const char *directive = element_size == 1 ? ".byte  " :
+                                    element_size == 2 ? ".short " :
+                                    element_size == 8 ? ".quad  " : ".long  ";
+            int value = globals[i].values[j];
+
+            /* Truncate to the element width, as a store would. */
+            if (element_size == 1) {
+                value = element && element->is_unsigned
+                    ? (int)(unsigned char)value : (int)(signed char)value;
+            } else if (element_size == 2) {
+                value = element && element->is_unsigned
+                    ? (int)(unsigned short)value : (int)(short)value;
+            }
+            fprintf(output, "    %s %d\n", directive, value);
         }
     }
     for (int i = 0; i < ctx->string_count; i++) {
@@ -649,24 +677,67 @@ static void generate_globals(struct cg_ctx *ctx, FILE *output)
     fprintf(output, ".text\n");
 }
 
+/*
+ * System V passes the first six integer or pointer arguments in these
+ * registers, in this order.
+ */
+static const char *arg_reg64[6] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
+static const char *arg_reg32[6] = { "%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d" };
+
+/* Spill an incoming register argument into the frame slot it was given. */
+static void emit_spill_parameter(struct Symbol *sym, FILE *output)
+{
+    int size = sym->ty ? sym->ty->size : 8;
+    int i = sym->param_index;
+
+    if (i >= 6) {
+        return;             /* already on the stack, addressed in place */
+    }
+    if (size == 8) {
+        fprintf(output, "    movq    %s, %d(%%rbp)\n", arg_reg64[i], sym->offset);
+    } else {
+        /*
+         * Narrower arguments arrive promoted to 32 bits, and the slot is at
+         * least a word wide, so one 4-byte store is correct for all of them.
+         */
+        fprintf(output, "    movl    %s, %d(%%rbp)\n", arg_reg32[i], sym->offset);
+    }
+}
+
 static void generate_function(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
-    collect_params(node->left, 0);
-    collect_locals(node->right);
+    /*
+     * Frame size was computed during semantic analysis, which knows the scopes
+     * and can reuse slots between disjoint blocks. Nothing is collected here.
+     *
+     * The call pushed an 8-byte return address and the prologue pushes %rbp, so
+     * %rsp is 16-byte aligned once both are on the stack. Rounding the frame to
+     * a multiple of 16 keeps it that way, which System V requires at every call.
+     */
+    int frame_size = node->sym ? node->sym->frame_size : 0;
+    struct ast_node *param;
+
+    frame_size = (frame_size + 15) / 16 * 16;
     ctx->current_function_end_label = ctx->label_count++;
 
-    fprintf(output, ".globl _%s\n", node->value);
-    fprintf(output, "_%s:\n", node->value);
-    fprintf(output, "    push    %%ebp\n");
-    fprintf(output, "    movl    %%esp, %%ebp\n");
-    if (local_stack_count > 0) {
-        fprintf(output, "    subl    $%d, %%esp\n", local_stack_count * 4);
+    fprintf(output, ".globl %s\n", node->value);
+    fprintf(output, "%s:\n", node->value);
+    fprintf(output, "    pushq   %%rbp\n");
+    fprintf(output, "    movq    %%rsp, %%rbp\n");
+    if (frame_size > 0) {
+        fprintf(output, "    subq    $%d, %%rsp\n", frame_size);
     }
+
+    for (param = node->left; param; param = param->right) {
+        if (param->type == AST_PARAM_LIST && param->left->sym) {
+            emit_spill_parameter(param->left->sym, output);
+        }
+    }
+
     generate_statement(ctx, node->right, output);
     fprintf(output, "    movl    $0, %%eax\n");
     fprintf(output, ".L%d:\n", ctx->current_function_end_label);
     generate_epilogue(output);
-    free_locals();
 }
 
 static void generate_program(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
@@ -694,8 +765,8 @@ static void generate_program(struct cg_ctx *ctx, struct ast_node *node, FILE *ou
         case AST_STRUCT_DEF:
             break;
         default:
-            fprintf(stderr, "Unsupported program node type: %d\n", node->type);
-            exit(1);
+            diag_internal(node->location, "unsupported program node type %d",
+                node->type);
     }
 }
 
@@ -715,7 +786,7 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
             break;
         case AST_DECL:
             if (node->array_length > 0) {
-                int offset = local_offset(node->value);
+                int offset = node->sym->offset;
                 /*
                  * Step by the element's real size. Striding by 4 through a
                  * char array would run past its end -- straight over the saved
@@ -737,10 +808,16 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
                     index++;
                 }
             } else if (node->left) {
+                /*
+                 * A scalar local owns a whole 4-byte slot and is read back with
+                 * a 4-byte load, so write all four bytes. The value has already
+                 * been narrowed and extended to its declared type. Narrow
+                 * stores are only for packed array elements, above.
+                 */
                 generate_exp(ctx, node->left, output);
-                fprintf(output, "    movl    %%eax, %d(%%ebp)\n", local_offset(node->value));
+                emit_store_slot(node->ty, node->sym->offset, output);
             } else {
-                fprintf(output, "    movl    $0, %d(%%ebp)\n", local_offset(node->value));
+                emit_zero_slot(node->ty, node->sym->offset, output);
             }
             break;
         case AST_EXPR_STMT:
@@ -816,21 +893,19 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
         }
         case AST_BREAK:
             if (ctx->loop_depth == 0) {
-                fprintf(stderr, "break used outside of loop\n");
-                exit(1);
+                diag_internal(node->location, "'break' outside a loop");
             }
             fprintf(output, "    jmp     .L%d\n", ctx->loop_break_labels[ctx->loop_depth - 1]);
             break;
         case AST_CONTINUE:
             if (ctx->loop_depth == 0) {
-                fprintf(stderr, "continue used outside of loop\n");
-                exit(1);
+                diag_internal(node->location, "'continue' outside a loop");
             }
             fprintf(output, "    jmp     .L%d\n", ctx->loop_continue_labels[ctx->loop_depth - 1]);
             break;
         default:
-            fprintf(stderr, "Unsupported statement node type: %d\n", node->type);
-            exit(1);
+            diag_internal(node->location, "unsupported statement node type %d",
+                node->type);
     }
 }
 
@@ -843,43 +918,44 @@ void generate_binop(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
     if ((node->type == AST_ADD || node->type == AST_SUB) &&
         (left_is_pointer || right_is_pointer)) {
         generate_exp(ctx, node->left, output);
-        fprintf(output, "    push    %%eax\n");
+        fprintf(output, "    pushq   %%rax\n");
         generate_exp(ctx, node->right, output);
-        fprintf(output, "    pop     %%edx\n");
+        fprintf(output, "    popq    %%rdx\n");
 
         if (left_is_pointer && right_is_pointer && node->type == AST_SUB) {
-            fprintf(output, "    subl    %%eax, %%edx\n");
-            fprintf(output, "    movl    %%edx, %%eax\n");
-            fprintf(output, "    cdq\n");
-            fprintf(output, "    movl    $%d, %%ecx\n",
+            fprintf(output, "    subq    %%rax, %%rdx\n");
+            fprintf(output, "    movq    %%rdx, %%rax\n");
+            fprintf(output, "    cqto\n");
+            fprintf(output, "    movq    $%d, %%rcx\n",
                 ty_element_size(node->left->ty));
-            fprintf(output, "    idivl   %%ecx\n");
+            fprintf(output, "    idivq   %%rcx\n");
             return;
         }
         if (left_is_pointer && !right_is_pointer) {
-            fprintf(output, "    imull   $%d, %%eax\n",
+            fprintf(output, "    cltq\n");
+            fprintf(output, "    imulq   $%d, %%rax\n",
                 ty_element_size(node->left->ty));
             if (node->type == AST_ADD) {
-                fprintf(output, "    addl    %%edx, %%eax\n");
+                fprintf(output, "    addq    %%rdx, %%rax\n");
             } else {
-                fprintf(output, "    subl    %%eax, %%edx\n");
-                fprintf(output, "    movl    %%edx, %%eax\n");
+                fprintf(output, "    subq    %%rax, %%rdx\n");
+                fprintf(output, "    movq    %%rdx, %%rax\n");
             }
             return;
         }
         if (right_is_pointer && !left_is_pointer && node->type == AST_ADD) {
-            fprintf(output, "    imull   $%d, %%edx\n",
+            fprintf(output, "    imulq   $%d, %%rdx\n",
                 ty_element_size(node->right->ty));
-            fprintf(output, "    addl    %%edx, %%eax\n");
+            fprintf(output, "    addq    %%rdx, %%rax\n");
             return;
         }
     }
 
     generate_exp(ctx, node->left, output);
-    fprintf(output, "    push    %%eax\n");
+    fprintf(output, "    pushq   %%rax\n");
 
     generate_exp(ctx, node->right, output);
-    fprintf(output, "    pop     %%edx\n");
+    fprintf(output, "    popq    %%rdx\n");
 
     switch (node->type) {
         case AST_ADD:
@@ -893,9 +969,9 @@ void generate_binop(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
             fprintf(output, "    imull   %%edx, %%eax\n");
             break;
         case AST_DIV:
-            fprintf(output, "    push    %%eax\n");
+            fprintf(output, "    pushq   %%rax\n");
             fprintf(output, "    movl    %%edx, %%eax\n");
-            fprintf(output, "    pop     %%ecx\n");
+            fprintf(output, "    popq    %%rcx\n");
             if (is_unsigned) {
                 fprintf(output, "    xorl    %%edx, %%edx\n");
                 fprintf(output, "    divl    %%ecx\n");
@@ -905,9 +981,9 @@ void generate_binop(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
             }
             break;
         case AST_MOD:
-            fprintf(output, "    push    %%eax\n");
+            fprintf(output, "    pushq   %%rax\n");
             fprintf(output, "    movl    %%edx, %%eax\n");
-            fprintf(output, "    pop     %%ecx\n");
+            fprintf(output, "    popq    %%rcx\n");
             if (is_unsigned) {
                 fprintf(output, "    xorl    %%edx, %%edx\n");
                 fprintf(output, "    divl    %%ecx\n");
@@ -937,38 +1013,37 @@ void generate_binop(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
             fprintf(output, "    xorl    %%edx, %%eax\n");
             break;
         case AST_EQUAL:
-            fprintf(output, "    cmpl    %%eax, %%edx\n");
+            emit_compare(node->left->ty, node->right->ty, output);
             fprintf(output, "    movl    $0, %%eax\n");
             fprintf(output, "    sete    %%al\n");
             break;
         case AST_NOT_EQUAL:
-            fprintf(output, "    cmpl    %%eax, %%edx\n");
+            emit_compare(node->left->ty, node->right->ty, output);
             fprintf(output, "    movl    $0, %%eax\n");
             fprintf(output, "    setne   %%al\n");
             break;
         case AST_LESS:
-            fprintf(output, "    cmpl    %%eax, %%edx\n");
+            emit_compare(node->left->ty, node->right->ty, output);
             fprintf(output, "    movl    $0, %%eax\n");
             fprintf(output, is_unsigned ? "    setb    %%al\n" : "    setl    %%al\n");
             break;
         case AST_LESS_EQUAL:
-            fprintf(output, "    cmpl    %%eax, %%edx\n");
+            emit_compare(node->left->ty, node->right->ty, output);
             fprintf(output, "    movl    $0, %%eax\n");
             fprintf(output, is_unsigned ? "    setbe   %%al\n" : "    setle   %%al\n");
             break;
         case AST_GREATER:
-            fprintf(output, "    cmpl    %%eax, %%edx\n");
+            emit_compare(node->left->ty, node->right->ty, output);
             fprintf(output, "    movl    $0, %%eax\n");
             fprintf(output, is_unsigned ? "    seta    %%al\n" : "    setg    %%al\n");
             break;
         case AST_GREATER_EQUAL:
-            fprintf(output, "    cmpl    %%eax, %%edx\n");
+            emit_compare(node->left->ty, node->right->ty, output);
             fprintf(output, "    movl    $0, %%eax\n");
             fprintf(output, is_unsigned ? "    setae   %%al\n" : "    setge   %%al\n");
             break;
         default:
-            fprintf(stderr, "Unsupported operation in AST\n");
-            exit(1);
+            diag_internal(node->location, "unsupported operation in AST");
     }
 }
 
@@ -979,16 +1054,43 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             fprintf(output, "    movl    $%s, %%eax\n", node->value);
             break;
         case AST_STRINGLIT:
-            fprintf(output, "    movl    $.LC%d, %%eax\n", node->string_label);
+            fprintf(output, "    leaq    .LC%d(%%rip), %%rax\n", node->string_label);
             break;
         case AST_IDENTIFIER:
-            generate_identifier_load(node->value, output);
+            generate_identifier_load(node, output);
             break;
         case AST_CALL: {
-            int arg_count = generate_call_args(ctx, node->left, output);
-            fprintf(output, "    call    _%s\n", node->value);
-            if (arg_count > 0) {
-                fprintf(output, "    addl    $%d, %%esp\n", arg_count * 4);
+            int arg_count = count_args(node->left);
+            int stack_args = arg_count > 6 ? arg_count - 6 : 0;
+            /*
+             * %rsp is 16-byte aligned here. Each push moves it by 8, so an odd
+             * number of stack arguments would leave it misaligned at the call,
+             * which System V forbids.
+             */
+            int padding = (stack_args % 2) ? 8 : 0;
+            int registers = arg_count < 6 ? arg_count : 6;
+            int i;
+
+            if (padding) {
+                fprintf(output, "    subq    $8, %%rsp\n");
+            }
+
+            /*
+             * Arguments are pushed last-first, so the first one ends up on top
+             * and the register arguments pop off in order.
+             */
+            generate_call_args(ctx, node->left, output);
+            for (i = 0; i < registers; i++) {
+                fprintf(output, "    popq    %s\n", arg_reg64[i]);
+            }
+
+            /* A variadic callee reads %al for the count of vector registers. */
+            fprintf(output, "    movl    $0, %%eax\n");
+            fprintf(output, "    call    %s\n", node->value);
+
+            if (stack_args > 0 || padding) {
+                fprintf(output, "    addq    $%d, %%rsp\n",
+                    stack_args * 8 + padding);
             }
             break;
         }
@@ -1064,11 +1166,12 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
         }
         case AST_ASSIGN:
             generate_exp(ctx, node->right, output);
-            fprintf(output, "    push    %%eax\n");
+            fprintf(output, "    pushq   %%rax\n");
             generate_lvalue_address(ctx, node->left, output);
-            fprintf(output, "    pop     %%edx\n");
+            fprintf(output, "    popq    %%rdx\n");
             emit_store_indirect(node->left->ty, output);
-            fprintf(output, "    movl    %%edx, %%eax\n");
+            fprintf(output, node->left->ty && node->left->ty->size == 8
+                ? "    movq    %%rdx, %%rax\n" : "    movl    %%edx, %%eax\n");
             break;
         case AST_ADDRESS_OF:
             generate_lvalue_address(ctx, node->left, output);
@@ -1086,32 +1189,32 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             emit_load_indirect(node->ty, output);
             break;
         case AST_PRE_INCREMENT:
-            generate_identifier_load(node->left->value, output);
-            fprintf(output, "    addl    $%d, %%eax\n", node->pointer_depth > 0 ? 4 : 1);
+            generate_identifier_load(node->left, output);
+            emit_step(node->ty, 1, output);
             generate_cast(codegen_type_name(node->data_type), output);
-            generate_identifier_store(node->left->value, output);
+            generate_identifier_store(node->left, output);
             break;
         case AST_PRE_DECREMENT:
-            generate_identifier_load(node->left->value, output);
-            fprintf(output, "    subl    $%d, %%eax\n", node->pointer_depth > 0 ? 4 : 1);
+            generate_identifier_load(node->left, output);
+            emit_step(node->ty, 0, output);
             generate_cast(codegen_type_name(node->data_type), output);
-            generate_identifier_store(node->left->value, output);
+            generate_identifier_store(node->left, output);
             break;
         case AST_POST_INCREMENT:
-            generate_identifier_load(node->left->value, output);
-            fprintf(output, "    push    %%eax\n");
-            fprintf(output, "    addl    $%d, %%eax\n", node->pointer_depth > 0 ? 4 : 1);
+            generate_identifier_load(node->left, output);
+            fprintf(output, "    pushq   %%rax\n");
+            emit_step(node->ty, 1, output);
             generate_cast(codegen_type_name(node->data_type), output);
-            generate_identifier_store(node->left->value, output);
-            fprintf(output, "    pop     %%eax\n");
+            generate_identifier_store(node->left, output);
+            fprintf(output, "    popq    %%rax\n");
             break;
         case AST_POST_DECREMENT:
-            generate_identifier_load(node->left->value, output);
-            fprintf(output, "    push    %%eax\n");
-            fprintf(output, "    subl    $%d, %%eax\n", node->pointer_depth > 0 ? 4 : 1);
+            generate_identifier_load(node->left, output);
+            fprintf(output, "    pushq   %%rax\n");
+            emit_step(node->ty, 0, output);
             generate_cast(codegen_type_name(node->data_type), output);
-            generate_identifier_store(node->left->value, output);
-            fprintf(output, "    pop     %%eax\n");
+            generate_identifier_store(node->left, output);
+            fprintf(output, "    popq    %%rax\n");
             break;
         case AST_SIZEOF:
             fprintf(output, "    movl    $%d, %%eax\n", sizeof_node(node));
@@ -1135,9 +1238,19 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             fprintf(output, "    sete    %%al\n");
             break;
         default:
-            fprintf(stderr, "Unsupported AST node type: %d\n", node->type);
-            exit(1);
+            diag_internal(node->location, "unsupported AST node type %d",
+                node->type);
     }
+}
+
+static int count_args(struct ast_node *node)
+{
+    int count = 0;
+
+    for (; node; node = node->right) {
+        count++;
+    }
+    return count;
 }
 
 static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
@@ -1147,21 +1260,26 @@ static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *o
     }
 
     if (node->type != AST_ARG_LIST) {
-        fprintf(stderr, "Unsupported argument node type: %d\n", node->type);
-        exit(1);
+        diag_internal(node->location, "unsupported argument node type %d",
+            node->type);
     }
 
     int count = generate_call_args(ctx, node->right, output);
     generate_exp(ctx, node->left, output);
-    fprintf(output, "    push    %%eax\n");
+    fprintf(output, "    pushq   %%rax\n");
 
     return count + 1;
 }
 
-
 void write_assembly_to_file(const char *filename, struct ast_node *ast)
 {
-    FILE *out_file = fopen(filename, "w");
+    /*
+     * Binary mode, so a newline stays one byte on every platform. In text mode
+     * Windows would write CRLF, and the generated assembly would differ from
+     * the same compiler's output on Linux -- which would make the byte-for-byte
+     * golden comparison platform-dependent. "b" is a no-op on POSIX.
+     */
+    FILE *out_file = fopen(filename, "wb");
     if (!out_file) {
         perror("Failed to open file for writing");
         exit(EXIT_FAILURE);

@@ -1,24 +1,24 @@
-.globl _main
-_main:
-    push    %ebp
-    movl    %esp, %ebp
-    subl    $4, %esp
+.globl main
+main:
+    pushq   %rbp
+    movq    %rsp, %rbp
+    subq    $16, %rsp
     movl    $3, %eax
-    movl    %eax, -4(%ebp)
-    movl    -4(%ebp), %eax
-    push    %eax
+    movl    %eax, -4(%rbp)
+    movl    -4(%rbp), %eax
+    pushq   %rax
     movl    $2, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    leal    -4(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -4(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -4(%ebp), %eax
-    push    %eax
+    movl    -4(%rbp), %eax
+    pushq   %rax
     movl    $3, %eax
-    pop     %edx
+    popq    %rdx
     imull   %edx, %eax
     jmp     .L0
     movl    $0, %eax

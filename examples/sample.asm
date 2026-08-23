@@ -1,26 +1,26 @@
-.globl _main
-_main:
-    push    %ebp
-    movl    %esp, %ebp
+.globl main
+main:
+    pushq   %rbp
+    movq    %rsp, %rbp
     movl    $1, %eax
-    push    %eax
+    pushq   %rax
     movl    $2, %eax
-    push    %eax
+    pushq   %rax
     movl    $3, %eax
-    push    %eax
+    pushq   %rax
     movl    $4, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    pop     %edx
+    popq    %rdx
     imull   %edx, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
+    pushq   %rax
     movl    $0, %eax
     cmpl    $0, %eax
     movl    $0, %eax
     sete    %al
-    pop     %edx
+    popq    %rdx
     subl    %eax, %edx
     movl    %edx, %eax
     jmp     .L0

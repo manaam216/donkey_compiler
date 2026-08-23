@@ -5,9 +5,12 @@
 #include "defs.h"
 #include "decl.h"
 #include "type.h"
+#include "symbol.h"
+#include "diag.h"
 
 struct global_symbol {
     const char *name;
+    struct Symbol *sym;
     int is_function;
     CType type;
     int pointer_depth;
@@ -25,6 +28,7 @@ struct local_symbol {
     int array_length;
     const char *struct_name;
     int depth;
+    struct Symbol *sym;
 };
 
 struct struct_field {
@@ -63,6 +67,15 @@ struct sema_ctx {
     int scope_depth;
     int loop_depth;
     int error_count;
+
+    /*
+     * Stack layout for the function being analysed. frame_offset is the bytes
+     * used by the enclosing scopes; leaving a scope rewinds it so disjoint
+     * blocks reuse the same slots. frame_max is the high-water mark, which is
+     * what the function actually needs to reserve.
+     */
+    int frame_offset;
+    int frame_max;
 
     const char *current_function;
     CType current_return_type;
@@ -264,22 +277,22 @@ static CType semantic_type_from_name(const char *name)
 
 static void semantic_error_at(struct sema_ctx *ctx, struct ast_node *node, const char *format, ...)
 {
+    SourceLocation location;
     va_list args;
+    char message[512];
 
-    fprintf(stderr, "Semantic error");
-    if (node && node->location.line > 0) {
-        fprintf(stderr, " at %s:%d:%d", ctx->source_path,
-            node->location.line, node->location.column);
+    location.line = 0;
+    location.column = 0;
+    if (node) {
+        location = node->location;
     }
-    if (ctx->current_function) {
-        fprintf(stderr, " in function '%s'", ctx->current_function);
-    }
-    fprintf(stderr, ": ");
 
     va_start(args, format);
-    vfprintf(stderr, format, args);
+    vsnprintf(message, sizeof(message), format, args);
     va_end(args);
-    fprintf(stderr, "\n");
+
+    diag_set_function(ctx->current_function);
+    diag_at(DIAG_ERROR, location, "%s", message);
     ctx->error_count++;
 }
 
@@ -351,6 +364,10 @@ static void add_global(struct sema_ctx *ctx, struct ast_node *node)
     }
 
     node->ty = resolve_type(ctx, node);
+    if (!node->sym) {
+        node->sym = sym_new(name, is_function ? SYM_FUNCTION : SYM_GLOBAL, node->ty);
+    }
+    ctx->globals[ctx->global_count].sym = node->sym;
     ctx->globals[ctx->global_count].name = name;
     ctx->globals[ctx->global_count].is_function = is_function;
     ctx->globals[ctx->global_count].type = node->data_type;
@@ -379,12 +396,15 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
     const char *name = node->value;
     int existing = find_local(ctx, name);
 
-    if (existing >= 0) {
-        if (ctx->locals[existing].depth == ctx->scope_depth) {
-            semantic_error_at(ctx, node, "duplicate declaration of '%s'", name);
-        } else {
-            semantic_error_at(ctx, node, "variable shadowing is not supported for '%s'", name);
-        }
+    /*
+     * Redeclaring a name in the same scope is an error; redeclaring it in an
+     * inner scope shadows the outer one. Shadowing works because each
+     * declaration now gets its own Symbol, so the two variables have distinct
+     * storage even though they share a name. find_local scans innermost-first,
+     * so references resolve to the nearest declaration.
+     */
+    if (existing >= 0 && ctx->locals[existing].depth == ctx->scope_depth) {
+        semantic_error_at(ctx, node, "duplicate declaration of '%s'", name);
         return;
     }
     ensure_capacity((void **)&ctx->locals, ctx->local_count,
@@ -395,6 +415,31 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
     }
 
     node->ty = resolve_type(ctx, node);
+    if (!node->sym) {
+        struct Type *resolved = resolve_type(ctx, node);
+        int size = resolved->size > 0 ? resolved->size : 4;
+
+        int align = resolved->align > 0 ? resolved->align : 4;
+
+        if (align < 4) {
+            align = 4;          /* never pack scalars tighter than a word */
+        }
+
+        node->sym = sym_new(name, SYM_LOCAL, resolved);
+        /*
+         * The frame grows downward from %rbp, so round the running total up to
+         * the type's alignment before claiming the slot. An 8-byte pointer or
+         * long must land on an 8-byte boundary.
+         */
+        ctx->frame_offset += size;
+        ctx->frame_offset = (ctx->frame_offset + align - 1) / align * align;
+        node->sym->offset = -ctx->frame_offset;
+        if (ctx->frame_offset > ctx->frame_max) {
+            ctx->frame_max = ctx->frame_offset;
+        }
+    }
+
+    ctx->locals[ctx->local_count].sym = node->sym;
     ctx->locals[ctx->local_count].name = name;
     ctx->locals[ctx->local_count].type = type;
     ctx->locals[ctx->local_count].pointer_depth = node->pointer_depth;
@@ -404,16 +449,69 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
     ctx->local_count++;
 }
 
+/*
+ * Parameters are already on the stack when the function is entered, above the
+ * saved frame pointer and return address, so they get positive offsets and do
+ * not consume frame space.
+ */
+static void add_parameter(struct sema_ctx *ctx, struct ast_node *node, int index)
+{
+    if (!node->sym) {
+        struct Type *resolved = resolve_type(ctx, node);
+
+        node->sym = sym_new(node->value, SYM_PARAM, resolved);
+        node->sym->param_index = index;
+
+        if (index < 6) {
+            /*
+             * Passed in a register: give it a frame slot for the prologue to
+             * spill into, so it can be addressed like any other local.
+             */
+            int size = resolved->size > 0 ? resolved->size : 8;
+            int align = resolved->align > 4 ? resolved->align : 4;
+
+            ctx->frame_offset += size;
+            ctx->frame_offset = (ctx->frame_offset + align - 1) / align * align;
+            node->sym->offset = -ctx->frame_offset;
+            if (ctx->frame_offset > ctx->frame_max) {
+                ctx->frame_max = ctx->frame_offset;
+            }
+        } else {
+            /* Already on the stack, above the saved %rbp and return address. */
+            node->sym->offset = 16 + ((index - 6) * 8);
+        }
+    }
+    add_local(ctx, node, node->data_type);
+}
+
 static void enter_scope(struct sema_ctx *ctx)
 {
     ctx->scope_depth++;
 }
 
+
 static void leave_scope(struct sema_ctx *ctx)
 {
+    int i;
+
     while (ctx->local_count > 0 && ctx->locals[ctx->local_count - 1].depth == ctx->scope_depth) {
         ctx->local_count--;
     }
+
+    /*
+     * Rewind the frame to what the still-live locals occupy, so two disjoint
+     * blocks reuse the same stack slots instead of each claiming their own.
+     * frame_max already recorded the deepest point reached.
+     */
+    ctx->frame_offset = 0;
+    for (i = 0; i < ctx->local_count; i++) {
+        struct Symbol *sym = ctx->locals[i].sym;
+
+        if (sym && sym->kind == SYM_LOCAL && -sym->offset > ctx->frame_offset) {
+            ctx->frame_offset = -sym->offset;
+        }
+    }
+
     ctx->scope_depth--;
 }
 
@@ -502,6 +600,49 @@ static void analyze_block(struct sema_ctx *ctx, struct ast_node *node, int creat
     }
 }
 
+/*
+ * The first statement of a list, looking through nested list nodes, so a
+ * warning can point at the statement itself rather than the list holding it.
+ */
+static struct ast_node *first_statement(struct ast_node *node)
+{
+    while (node && node->type == AST_STATEMENT_LIST) {
+        node = node->left;
+    }
+    return node;
+}
+
+/*
+ * Anything after return, break, or continue in the same block cannot run.
+ * Reported once per block, at the first unreachable statement.
+ */
+static void warn_if_unreachable(struct sema_ctx *ctx, struct ast_node *statement,
+    struct ast_node *rest)
+{
+    struct ast_node *next;
+    const char *keyword;
+
+    if (!statement || !rest) {
+        return;
+    }
+
+    switch (statement->type) {
+        case AST_RETURN:   keyword = "return"; break;
+        case AST_BREAK:    keyword = "break"; break;
+        case AST_CONTINUE: keyword = "continue"; break;
+        default:           return;
+    }
+
+    next = first_statement(rest);
+    if (!next) {
+        return;
+    }
+
+    diag_set_function(ctx->current_function);
+    diag_at(DIAG_WARNING, next->location,
+        "unreachable statement after '%s'", keyword);
+}
+
 static void analyze_statement(struct sema_ctx *ctx, struct ast_node *node)
 {
     struct ast_node *parts;
@@ -517,6 +658,7 @@ static void analyze_statement(struct sema_ctx *ctx, struct ast_node *node)
             break;
         case AST_STATEMENT_LIST:
             analyze_statement(ctx, node->left);
+            warn_if_unreachable(ctx, node->left, node->right);
             analyze_statement(ctx, node->right);
             break;
         case AST_DECL:
@@ -659,17 +801,26 @@ static void analyze_top_level(struct sema_ctx *ctx, struct ast_node *node)
     } else if (node->type == AST_STRUCT_DEF) {
         return;
     } else if (node->type == AST_FUNCTION) {
+        int param_index = 0;
+
         ctx->current_function = node->value;
         ctx->local_count = 0;
         ctx->scope_depth = 1;
         ctx->loop_depth = 0;
+        ctx->frame_offset = 0;
+        ctx->frame_max = 0;
 
         for (param = node->left; param; param = param->right) {
             if (param->type == AST_PARAM_LIST) {
-                add_local(ctx, param->left, param->left->data_type);
+                add_parameter(ctx, param->left, param_index++);
             }
         }
         analyze_block(ctx, node->right, 0);
+
+        /* The frame the code generator must reserve for this function. */
+        if (node->sym) {
+            node->sym->frame_size = ctx->frame_max;
+        }
         ctx->current_function = NULL;
     }
 }
@@ -689,8 +840,14 @@ static CType usual_arithmetic_type(CType left, CType right)
     right = integer_promotion(right);
     if (left == right) return left;
     if (left == TYPE_ULONG || right == TYPE_ULONG) return TYPE_ULONG;
+    /*
+     * On LP64 a long is wider than an unsigned int and can represent every one
+     * of its values, so the unsigned operand converts to long rather than both
+     * becoming unsigned. (Where long and int are the same width -- ILP32 --
+     * the result would be unsigned long instead.)
+     */
     if ((left == TYPE_LONG && right == TYPE_UINT) ||
-        (left == TYPE_UINT && right == TYPE_LONG)) return TYPE_ULONG;
+        (left == TYPE_UINT && right == TYPE_LONG)) return TYPE_LONG;
     if (left == TYPE_UINT || right == TYPE_UINT) return TYPE_UINT;
     if (left == TYPE_LONG || right == TYPE_LONG) return TYPE_LONG;
     return TYPE_INT;
@@ -816,6 +973,7 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
             local = find_local(ctx, node->value);
             global = find_global(ctx, node->value);
             if (local >= 0) {
+                node->sym = ctx->locals[local].sym;
                 node->data_type = ctx->locals[local].type;
                 node->pointer_depth = ctx->locals[local].pointer_depth;
                 node->array_length = ctx->locals[local].array_length;
@@ -823,6 +981,7 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
                 return node->data_type;
             }
             if (global >= 0 && !ctx->globals[global].is_function) {
+                node->sym = ctx->globals[global].sym;
                 node->pointer_depth = ctx->globals[global].pointer_depth;
                 node->array_length = ctx->globals[global].array_length;
                 node->struct_name = ctx->globals[global].struct_name ? strdup(ctx->globals[global].struct_name) : NULL;
@@ -1141,8 +1300,12 @@ static void check_top_level_types(struct sema_ctx *ctx, struct ast_node *node)
         ctx->current_return_pointer_depth = node->pointer_depth;
         ctx->local_count = 0;
         ctx->scope_depth = 1;
-        for (param = node->left; param; param = param->right)
-            add_local(ctx, param->left, param->left->data_type);
+        ctx->frame_offset = 0;
+        {
+            int param_index = 0;
+            for (param = node->left; param; param = param->right)
+                add_parameter(ctx, param->left, param_index++);
+        }
         if (node->right) check_statement_types(ctx, node->right->left);
     }
 }

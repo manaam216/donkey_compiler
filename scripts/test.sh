@@ -11,11 +11,18 @@ compiler="${build_dir}/donkey"
 # and a codegen regression.
 update_golden="${UPDATE_GOLDEN:-0}"
 
-# Set SKIP_RUN=1 to check compilation, golden assembly, and diagnostics without
-# assembling or executing anything. Codegen still emits MinGW-style `_main`
-# symbols, so linking only works on i686 Windows until the x86-64 System V
-# backend lands; this lets other platforms exercise the rest of the compiler.
-skip_run="${SKIP_RUN:-0}"
+# Donkey emits x86-64 System V assembly, so assembling and running the output
+# needs a matching host toolchain. Where there is not one -- a 32-bit MinGW
+# development box, say -- the suite still compiles every example, diffs the
+# golden assembly, and checks every diagnostic; it just cannot execute.
+# Set SKIP_RUN=1 to force that mode, or 0 to insist on running.
+if [ -n "${SKIP_RUN:-}" ]; then
+    skip_run="$SKIP_RUN"
+elif "$cc" -dumpmachine 2>/dev/null | grep -q "^x86_64.*linux"; then
+    skip_run=0
+else
+    skip_run=1
+fi
 
 golden_dir=tests/golden
 expected_dir=tests/expected
@@ -44,6 +51,8 @@ examples/wide_values.c wide_values
 examples/char_arrays.c char_arrays
 examples/struct_layout.c struct_layout
 examples/struct_arrays.c struct_arrays
+examples/shadowing.c shadowing
+examples/many_args.c many_args
 tests/semantic/valid_forward_call.c valid_forward_call
 "
 
@@ -56,7 +65,7 @@ cflags="${CFLAGS:--Wall -Wextra -g}"
 
 # shellcheck disable=SC2086 # cflags is a deliberate word-split flag list
 "$cc" -Iinclude $cflags -o "$compiler" \
-    src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c src/type.c
+    src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c src/type.c src/symbol.c src/diag.c
 
 failures=0
 
@@ -121,9 +130,10 @@ while read -r source name; do
         continue
     fi
 
+
     # Rename the example's entry point so the harness can own `main`.
-    # \b_main\b avoids touching identifiers that merely end in _main.
-    sed 's/\b_main\b/_donkey_main/g' "$asm" > "$wrapped"
+    # \bmain\b avoids touching identifiers that merely contain "main".
+    sed 's/\bmain\b/donkey_main/g' "$asm" > "$wrapped"
 
     "$cc" -x assembler "$wrapped" -x c tests/harness.c -o "$exe"
 
@@ -154,13 +164,54 @@ expect_error() {
     echo "  ok  $(basename "$input")"
 }
 
-expect_error tests/syntax/missing_semicolon.c "Parse error at tests/syntax/missing_semicolon.c:4:1: expected ';', found '}'"
-expect_error tests/syntax/invalid_character.c "Lex error at tests/syntax/invalid_character.c:3:12: invalid character '@'"
-expect_error tests/semantic/undeclared_variable.c "Semantic error at tests/semantic/undeclared_variable.c:3:12 in function 'main': use of undeclared variable 'missing'"
+# Recovery: check that a file yields at least N distinct errors, so one problem
+# does not mask the rest.
+expect_error_count() {
+    input="$1"
+    minimum="$2"
+    diagnostics="$build_dir/errors.txt"
+
+    if "$compiler" "$input" "$build_dir/invalid.asm" >/dev/null 2>"$diagnostics"; then
+        fail "expected compiler to reject $input"
+        return 1
+    fi
+    count=$(grep -c ": error: " "$diagnostics" || true)
+    if [ "$count" -lt "$minimum" ]; then
+        fail "expected at least $minimum errors from $input, got $count"
+        cat "$diagnostics" >&2
+        return 1
+    fi
+    echo "  ok  $(basename "$input") ($count errors reported)"
+}
+
+# A warning is reported but must not fail the build.
+expect_warning() {
+    input="$1"
+    expected="$2"
+    diagnostics="$build_dir/warnings.txt"
+
+    if ! "$compiler" "$input" "$build_dir/warned.asm" >/dev/null 2>"$diagnostics"; then
+        fail "$input should compile despite warnings"
+        cat "$diagnostics" >&2
+        return 1
+    fi
+    if ! grep -F "$expected" "$diagnostics" >/dev/null; then
+        fail "expected warning '$expected' for $input"
+        cat "$diagnostics" >&2
+        return 1
+    fi
+    echo "  ok  $(basename "$input") (warned, still compiled)"
+}
+
+expect_error tests/syntax/missing_semicolon.c "tests/syntax/missing_semicolon.c:4:1: error: expected ';', found '}'"
+expect_error tests/syntax/invalid_character.c "tests/syntax/invalid_character.c:3:12: error: invalid character '@'"
+expect_error tests/semantic/undeclared_variable.c "tests/semantic/undeclared_variable.c:3:12: error: use of undeclared variable 'missing'"
+# The quoted source line and caret under the offending column.
+expect_error tests/semantic/undeclared_variable.c "    return missing;"
+expect_error tests/semantic/undeclared_variable.c "In function 'main':"
 expect_error tests/semantic/wrong_argument_count.c "expects 2 argument(s), but 1 provided"
 expect_error tests/semantic/duplicate_declaration.c "duplicate declaration of 'value'"
 expect_error tests/semantic/break_outside_loop.c "'break' statement is not inside a loop"
-expect_error tests/semantic/shadowing.c "variable shadowing is not supported for 'value'"
 expect_error tests/semantic/call_shadowed_function.c "called object 'helper' is not a function"
 expect_error tests/semantic/invalid_pointer_assignment.c "cannot assign int to int*"
 expect_error tests/semantic/invalid_dereference.c "cannot dereference non-pointer expression"
@@ -168,6 +219,9 @@ expect_error tests/semantic/invalid_pointer_addition.c "invalid operands to poin
 expect_error tests/semantic/too_many_array_initializers.c "too many initializers for array 'values'"
 expect_error tests/semantic/invalid_pointer_subtraction.c "cannot subtract incompatible pointer types"
 expect_error tests/limits/global_array_too_long.c "exceeds the supported length of 256"
+expect_error_count tests/semantic/multiple_errors.c 4
+expect_error_count tests/syntax/multiple_errors.c 2
+expect_warning tests/semantic/unreachable_after_return.c "warning: unreachable statement after 'return'"
 
 if [ "$failures" -ne 0 ]; then
     echo "$failures check(s) failed." >&2

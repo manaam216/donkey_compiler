@@ -1,31 +1,31 @@
-.globl _main
-_main:
-    push    %ebp
-    movl    %esp, %ebp
-    subl    $8, %esp
-    movl    $0, -4(%ebp)
-    movl    $0, -8(%ebp)
+.globl main
+main:
+    pushq   %rbp
+    movq    %rsp, %rbp
+    subq    $16, %rsp
+    movl    $0, -4(%rbp)
+    movl    $0, -8(%rbp)
     movl    $100000, %eax
-    push    %eax
-    leal    -4(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -4(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
     movl    $0, %eax
-    push    %eax
+    pushq   %rax
     movl    $42, %eax
-    pop     %edx
+    popq    %rdx
     subl    %eax, %edx
     movl    %edx, %eax
-    push    %eax
-    leal    -8(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    pushq   %rax
+    leaq    -8(%rbp), %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    -4(%ebp), %eax
-    push    %eax
-    movl    -8(%ebp), %eax
-    pop     %edx
+    movl    -4(%rbp), %eax
+    pushq   %rax
+    movl    -8(%rbp), %eax
+    popq    %rdx
     addl    %edx, %eax
     jmp     .L0
     movl    $0, %eax

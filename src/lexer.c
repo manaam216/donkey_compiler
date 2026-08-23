@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include "defs.h"
 #include "decl.h"
+#include "diag.h"
 
 static const char *lexer_source_path;
 static int current_line;
@@ -52,16 +53,24 @@ static void tracked_ungetc(int c, FILE *infile)
 #define fgetc tracked_fgetc
 #define ungetc tracked_ungetc
 
+/*
+ * An invalid character is reported and then skipped, so one bad byte does not
+ * hide the rest of the file.
+ */
 static void lex_error_at(int line, int column, const char *format, ...)
 {
+    SourceLocation location;
     va_list args;
+    char message[256];
 
-    fprintf(stderr, "Lex error at %s:%d:%d: ", lexer_source_path, line, column);
+    location.line = line;
+    location.column = column;
+
     va_start(args, format);
-    vfprintf(stderr, format, args);
+    vsnprintf(message, sizeof(message), format, args);
     va_end(args);
-    fprintf(stderr, "\n");
-    exit(EXIT_FAILURE);
+
+    diag_at(DIAG_ERROR, location, "%s", message);
 }
 
 void lex(FILE *infile, const char *source_path, struct token **tokens, int *token_count)
@@ -109,10 +118,16 @@ void lex(FILE *infile, const char *source_path, struct token **tokens, int *toke
         } else if (c == '.') {
             add_token(tokens, token_count, T_DOT, ".");
         } else if (c == '\'') {
-            int value;
+            int value = 0;
             c = fgetc(infile);
             if (c == EOF || c == '\n') {
                 lex_error_at(token_line, token_column, "unterminated character literal");
+                /* Hand the newline back so line counting stays right. */
+                if (c == '\n') {
+                    ungetc(c, infile);
+                }
+                add_token(tokens, token_count, T_CHARLIT, "0");
+                continue;
             }
             if (c == '\\') {
                 c = fgetc(infile);
@@ -127,6 +142,13 @@ void lex(FILE *infile, const char *source_path, struct token **tokens, int *toke
             c = fgetc(infile);
             if (c != '\'') {
                 lex_error_at(token_line, token_column, "unterminated character literal");
+                if (c == '\n' || c == EOF) {
+                    if (c == '\n') {
+                        ungetc(c, infile);
+                    }
+                    add_token(tokens, token_count, T_CHARLIT, "0");
+                    continue;
+                }
             }
             snprintf(buffer, sizeof(buffer), "%d", value);
             add_token(tokens, token_count, T_CHARLIT, buffer);
@@ -145,12 +167,25 @@ void lex(FILE *infile, const char *source_path, struct token **tokens, int *toke
                     else lex_error_at(token_line, token_column, "unsupported string escape '\\%c'", c);
                 }
                 if (buffer_index >= (int)sizeof(buffer) - 1) {
-                    lex_error_at(token_line, token_column, "string literal is too long");
+                    /*
+                     * Report once, then keep scanning for the closing quote
+                     * without storing more. Appending here would overrun the
+                     * buffer now that an error no longer ends compilation.
+                     */
+                    if (buffer_index == (int)sizeof(buffer) - 1) {
+                        lex_error_at(token_line, token_column,
+                            "string literal is too long");
+                        buffer_index++;
+                    }
+                    continue;
                 }
                 buffer[buffer_index++] = c;
             }
             if (c != '"') {
                 lex_error_at(token_line, token_column, "unterminated string literal");
+            }
+            if (buffer_index > (int)sizeof(buffer) - 1) {
+                buffer_index = (int)sizeof(buffer) - 1;   /* truncated above */
             }
             buffer[buffer_index] = '\0';
             add_token(tokens, token_count, T_STRINGLIT, buffer);

@@ -13,8 +13,8 @@ static struct Type basic_short  = { TY_SHORT, 2, 2, 0, NULL, 0, NULL, NULL, 1 };
 static struct Type basic_ushort = { TY_SHORT, 2, 2, 1, NULL, 0, NULL, NULL, 1 };
 static struct Type basic_int    = { TY_INT,   4, 4, 0, NULL, 0, NULL, NULL, 1 };
 static struct Type basic_uint   = { TY_INT,   4, 4, 1, NULL, 0, NULL, NULL, 1 };
-static struct Type basic_long   = { TY_LONG,  4, 4, 0, NULL, 0, NULL, NULL, 1 };
-static struct Type basic_ulong  = { TY_LONG,  4, 4, 1, NULL, 0, NULL, NULL, 1 };
+static struct Type basic_long   = { TY_LONG,  8, 8, 0, NULL, 0, NULL, NULL, 1 };
+static struct Type basic_ulong  = { TY_LONG,  8, 8, 1, NULL, 0, NULL, NULL, 1 };
 
 struct Type *ty_char   = &basic_char;
 struct Type *ty_uchar  = &basic_uchar;
@@ -25,8 +25,8 @@ struct Type *ty_uint   = &basic_uint;
 struct Type *ty_long   = &basic_long;
 struct Type *ty_ulong  = &basic_ulong;
 
-/* Pointer size and alignment for the current 32-bit target. */
-#define POINTER_SIZE 4
+/* Pointer size and alignment for the x86-64 target. */
+#define POINTER_SIZE 8
 
 /*
  * Derived types are tracked so ty_cleanup can release them. The compiler

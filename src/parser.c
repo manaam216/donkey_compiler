@@ -4,20 +4,61 @@
 #include <stdlib.h>
 #include <string.h>
 #include "decl.h"
+#include "diag.h"
 
 static const char *parser_source_path;
 
+/*
+ * Report a syntax error and keep going. The caller is expected to put the
+ * parser back on a token it can resume from -- see synchronize() -- so a single
+ * missing semicolon does not hide everything after it.
+ */
 static void parse_error_at(struct token *token, const char *format, ...)
 {
     va_list args;
+    char message[256];
 
-    fprintf(stderr, "Parse error at %s:%d:%d: ",
-        parser_source_path, token->location.line, token->location.column);
     va_start(args, format);
-    vfprintf(stderr, format, args);
+    vsnprintf(message, sizeof(message), format, args);
     va_end(args);
-    fprintf(stderr, "\n");
-    exit(EXIT_FAILURE);
+
+    diag_at(DIAG_ERROR, token->location, "%s", message);
+}
+
+/*
+ * Panic-mode recovery: skip tokens until something that plausibly starts a new
+ * statement or declaration. Stopping after a ';' or on a '}' means the parser
+ * resumes at a structural boundary rather than mid-expression, where it would
+ * only produce follow-on noise.
+ */
+static void synchronize(struct token *tokens, int *token_index)
+{
+    while (tokens[*token_index].type != T_EOF) {
+        if (tokens[*token_index].type == T_SEMICOLON) {
+            (*token_index)++;
+            return;
+        }
+        switch (tokens[*token_index].type) {
+            case T_CLOSEBRACE:
+            case T_IF:
+            case T_WHILE:
+            case T_FOR:
+            case T_RETURN:
+            case T_BREAK:
+            case T_CONTINUE:
+            case T_CHAR:
+            case T_SHORT:
+            case T_INT:
+            case T_LONG:
+            case T_SIGNED:
+            case T_UNSIGNED:
+            case T_STRUCT:
+                return;
+            default:
+                (*token_index)++;
+                break;
+        }
+    }
 }
 
 static const char* parse_type_name(struct token *tokens, int *token_index)
@@ -92,17 +133,20 @@ static int parse_array_length(struct token *tokens, int *token_index)
     if (tokens[*token_index].type != T_INTLIT) {
         parse_error_at(&tokens[*token_index], "expected array length, found '%s'",
             tokens[*token_index].value);
+        return 1;               /* keep going with a plausible length */
     }
     length = atoi(tokens[*token_index].value);
     if (length <= 0) {
         parse_error_at(&tokens[*token_index], "array length must be greater than zero");
+        length = 1;
     }
     (*token_index)++;
     if (tokens[*token_index].type != T_CLOSEBRACKET) {
         parse_error_at(&tokens[*token_index], "expected ']', found '%s'",
             tokens[*token_index].value);
+    } else {
+        (*token_index)++;
     }
-    (*token_index)++;
     return length;
 }
 
@@ -139,8 +183,9 @@ static struct ast_node* parse_initializer(struct token *tokens, int *token_index
     if (tokens[*token_index].type != T_CLOSEBRACE) {
         parse_error_at(&tokens[*token_index], "expected '}', found '%s'",
             tokens[*token_index].value);
+    } else {
+        (*token_index)++;
     }
-    (*token_index)++;
     return create_ast_node_at(AST_INITIALIZER_LIST, NULL, list, NULL, location);
 }
 
@@ -162,6 +207,7 @@ static const char *parse_struct_name(struct token *tokens, int *token_index)
     if (tokens[*token_index].type != T_IDENTIFIER) {
         parse_error_at(&tokens[*token_index], "expected struct name, found '%s'",
             tokens[*token_index].value);
+        return NULL;
     }
     name = tokens[*token_index].value;
     (*token_index)++;
@@ -177,13 +223,30 @@ struct ast_node* parse_program(struct token *tokens, int *token_index, const cha
 
 struct ast_node* parse_function_list(struct token *tokens, int *token_index)
 {
+    int errors_before;
+    int start_index;
+    struct ast_node *function;
+    struct ast_node *rest;
+
     if (tokens[*token_index].type == T_EOF) {
         return NULL;
     }
 
-    struct ast_node *function = parse_external_declaration(tokens, token_index);
-    struct ast_node *rest = parse_function_list(tokens, token_index);
+    errors_before = diag_error_count();
+    start_index = *token_index;
+    function = parse_external_declaration(tokens, token_index);
 
+    if (diag_error_count() > errors_before) {
+        if (diag_too_many_errors()) {
+            return function ? create_ast_node(AST_FUNCTION_LIST, NULL, function, NULL) : NULL;
+        }
+        if (*token_index == start_index && tokens[*token_index].type != T_EOF) {
+            (*token_index)++;
+        }
+        synchronize(tokens, token_index);
+    }
+
+    rest = parse_function_list(tokens, token_index);
     return create_ast_node(AST_FUNCTION_LIST, NULL, function, rest);
 }
 
@@ -239,8 +302,9 @@ struct ast_node* parse_struct_definition(struct token *tokens, int *token_index)
     if (tokens[*token_index].type != T_OPENBRACE) {
         parse_error_at(&tokens[*token_index], "expected '{', found '%s'",
             tokens[*token_index].value);
+    } else {
+        (*token_index)++;
     }
-    (*token_index)++;
 
     while (tokens[*token_index].type != T_CLOSEBRACE) {
         const char *type_name = parse_type_name(tokens, token_index);
@@ -299,16 +363,18 @@ struct ast_node* parse_function(struct token *tokens, int *token_index)
     tok = &tokens[*token_index];
     if (tok->type != T_OPENPAREN) {
         parse_error_at(tok, "expected '(', found '%s'", tok->value);
+    } else {
+        (*token_index)++;
     }
-    (*token_index)++;
 
     struct ast_node *params = parse_param_list(tokens, token_index);
 
     tok = &tokens[*token_index];
     if (tok->type != T_CLOSEPAREN) {
         parse_error_at(tok, "expected ')', found '%s'", tok->value);
+    } else {
+        (*token_index)++;
     }
-    (*token_index)++;
 
     struct ast_node *body = parse_block(tokens, token_index);
 
@@ -421,21 +487,45 @@ struct ast_node* parse_block(struct token *tokens, int *token_index)
     tok = &tokens[*token_index];
     if (tok->type != T_CLOSEBRACE) {
         parse_error_at(tok, "expected '}', found '%s'", tok->value);
+    } else {
+        (*token_index)++;
     }
-    (*token_index)++;
 
     return create_ast_node_at(AST_BLOCK, NULL, statements, NULL, block_location);
 }
 
 struct ast_node* parse_statement_list(struct token *tokens, int *token_index)
 {
-    if (tokens[*token_index].type == T_CLOSEBRACE) {
+    int errors_before;
+    int start_index;
+    struct ast_node *stmt;
+    struct ast_node *rest;
+
+    /*
+     * EOF as well as '}': after an error the closing brace may have been
+     * consumed, and without this the recursion would run off the token array.
+     */
+    if (tokens[*token_index].type == T_CLOSEBRACE ||
+        tokens[*token_index].type == T_EOF) {
         return NULL;
     }
 
-    struct ast_node *stmt = parse_statement(tokens, token_index);
-    struct ast_node *rest = parse_statement_list(tokens, token_index);
+    errors_before = diag_error_count();
+    start_index = *token_index;
+    stmt = parse_statement(tokens, token_index);
 
+    if (diag_error_count() > errors_before) {
+        if (diag_too_many_errors()) {
+            return stmt ? create_ast_node(AST_STATEMENT_LIST, NULL, stmt, NULL) : NULL;
+        }
+        /* Guarantee forward progress before resynchronising. */
+        if (*token_index == start_index && tokens[*token_index].type != T_EOF) {
+            (*token_index)++;
+        }
+        synchronize(tokens, token_index);
+    }
+
+    rest = parse_statement_list(tokens, token_index);
     return create_ast_node(AST_STATEMENT_LIST, NULL, stmt, rest);
 }
 
@@ -562,16 +652,18 @@ struct ast_node* parse_if_statement(struct token *tokens, int *token_index)
     if (tokens[*token_index].type != T_OPENPAREN) {
         parse_error_at(&tokens[*token_index], "expected '(' after if, found '%s'",
             tokens[*token_index].value);
+    } else {
+        (*token_index)++;
     }
-    (*token_index)++;
 
     struct ast_node *cond = parse_exp(tokens, token_index);
 
     if (tokens[*token_index].type != T_CLOSEPAREN) {
         parse_error_at(&tokens[*token_index], "expected ')' after if condition, found '%s'",
             tokens[*token_index].value);
+    } else {
+        (*token_index)++;
     }
-    (*token_index)++;
 
     struct ast_node *then_stmt = parse_statement(tokens, token_index);
     struct ast_node *else_stmt = NULL;
@@ -594,16 +686,18 @@ struct ast_node* parse_while_statement(struct token *tokens, int *token_index)
     if (tokens[*token_index].type != T_OPENPAREN) {
         parse_error_at(&tokens[*token_index], "expected '(' after while, found '%s'",
             tokens[*token_index].value);
+    } else {
+        (*token_index)++;
     }
-    (*token_index)++;
 
     struct ast_node *cond = parse_exp(tokens, token_index);
 
     if (tokens[*token_index].type != T_CLOSEPAREN) {
         parse_error_at(&tokens[*token_index], "expected ')' after while condition, found '%s'",
             tokens[*token_index].value);
+    } else {
+        (*token_index)++;
     }
-    (*token_index)++;
 
     return create_ast_node_at(AST_WHILE, NULL, cond, parse_statement(tokens, token_index),
         while_location);
@@ -617,8 +711,9 @@ struct ast_node* parse_for_statement(struct token *tokens, int *token_index)
     if (tokens[*token_index].type != T_OPENPAREN) {
         parse_error_at(&tokens[*token_index], "expected '(' after for, found '%s'",
             tokens[*token_index].value);
+    } else {
+        (*token_index)++;
     }
-    (*token_index)++;
 
     struct ast_node *init = parse_for_init(tokens, token_index);
 
@@ -633,8 +728,9 @@ struct ast_node* parse_for_statement(struct token *tokens, int *token_index)
     if (tokens[*token_index].type != T_CLOSEPAREN) {
         parse_error_at(&tokens[*token_index], "expected ')' after for clauses, found '%s'",
             tokens[*token_index].value);
+    } else {
+        (*token_index)++;
     }
-    (*token_index)++;
 
     struct ast_node *cond_post = create_ast_node_at(AST_FOR_PARTS, NULL, cond, post, for_location);
     struct ast_node *parts = create_ast_node_at(AST_FOR_PARTS, NULL, init, cond_post, for_location);
@@ -771,8 +867,9 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
             if (tokens[*token_index].type != T_CLOSEPAREN) {
                 parse_error_at(&tokens[*token_index], "expected ')' after function call, found '%s'",
                     tokens[*token_index].value);
+            } else {
+                (*token_index)++;
             }
-            (*token_index)++;
             struct ast_node *call = create_ast_node_at(AST_CALL, name, args, NULL,
                 identifier_location);
             if (tokens[*token_index].type == T_PLUS_PLUS || tokens[*token_index].type == T_MINUS_MINUS) {
@@ -803,8 +900,9 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
             if (tokens[*token_index].type != T_CLOSEBRACKET) {
                 parse_error_at(&tokens[*token_index], "expected ']', found '%s'",
                     tokens[*token_index].value);
+            } else {
+                (*token_index)++;
             }
-            (*token_index)++;
             id = create_ast_node_at(AST_ARRAY_SUBSCRIPT, NULL, id, index, bracket_location);
         }
         if (tokens[*token_index].type == T_PLUS_PLUS) {
@@ -837,8 +935,9 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
         tok = &tokens[*token_index];
         if (tok->type != T_CLOSEPAREN) {
             parse_error_at(tok, "expected closing parenthesis, found '%s'", tok->value);
+        } else {
+            (*token_index)++;
         }
-        (*token_index)++;
         return inner_exp;
     }
 
@@ -969,8 +1068,9 @@ struct ast_node* parse_conditional(struct token *tokens, int *token_index)
             parse_error_at(&tokens[*token_index],
                 "expected ':' in conditional expression, found '%s'",
                 tokens[*token_index].value);
+        } else {
+            (*token_index)++;
         }
-        (*token_index)++;
 
         struct ast_node *else_exp = parse_conditional(tokens, token_index);
         return create_ast_node(
@@ -1148,7 +1248,12 @@ struct ast_node* create_ast_node(ASTNodeType type, char *value, struct ast_node 
 
 struct ast_node* create_ast_node_at(ASTNodeType type, char *value, struct ast_node *left, struct ast_node *right, SourceLocation location)
 {
-    struct ast_node *node = malloc(sizeof(struct ast_node));
+    /*
+     * calloc, not malloc: fields the parser does not set (the resolved type and
+     * symbol, both filled in later by semantic analysis) must start NULL rather
+     * than holding whatever was on the heap.
+     */
+    struct ast_node *node = calloc(1, sizeof(struct ast_node));
     if (!node) {
         perror("Error allocating AST node");
         exit(EXIT_FAILURE);
@@ -1160,6 +1265,8 @@ struct ast_node* create_ast_node_at(ASTNodeType type, char *value, struct ast_no
     node->array_length = 0;
     node->string_label = 0;
     node->struct_name = NULL;
+    node->ty = NULL;
+    node->sym = NULL;
     node->location = location;
     node->value = value ? strdup(value) : NULL;
     node->left = left;

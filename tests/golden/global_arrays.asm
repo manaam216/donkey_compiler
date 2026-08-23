@@ -1,110 +1,120 @@
 .data
-.globl _table
-_table:
+    .align  4
+.globl table
+table:
     .long   3
     .long   5
     .long   0
     .long   0
-.globl _zeros
-_zeros:
+    .align  4
+.globl zeros
+zeros:
     .long   0
     .long   0
 .text
-.globl _main
-_main:
-    push    %ebp
-    movl    %esp, %ebp
-    subl    $16, %esp
+.globl main
+main:
+    pushq   %rbp
+    movq    %rsp, %rbp
+    subq    $32, %rsp
     movl    $1, %eax
-    movl    %eax, -12(%ebp)
+    movl    %eax, -12(%rbp)
     movl    $2, %eax
-    movl    %eax, -8(%ebp)
+    movl    %eax, -8(%rbp)
     movl    $3, %eax
-    movl    %eax, -4(%ebp)
-    movl    $0, -16(%ebp)
-    movl    $_table, %eax
-    push    %eax
-    leal    -16(%ebp), %eax
-    pop     %edx
-    movl    %edx, (%eax)
-    movl    %edx, %eax
-    leal    -12(%ebp), %eax
-    push    %eax
+    movl    %eax, -4(%rbp)
+    movq    $0, -24(%rbp)
+    leaq    table(%rip), %rax
+    pushq   %rax
+    leaq    -24(%rbp), %rax
+    popq    %rdx
+    movq    %rdx, (%rax)
+    movq    %rdx, %rax
+    leaq    -12(%rbp), %rax
+    pushq   %rax
     movl    $1, %eax
-    imull   $4, %eax
-    pop     %edx
-    addl    %edx, %eax
-    movl    (%eax), %eax
-    push    %eax
+    cltq
+    imulq   $4, %rax
+    popq    %rdx
+    addq    %rdx, %rax
+    movl    (%rax), %eax
+    pushq   %rax
     movl    $7, %eax
-    pop     %edx
+    popq    %rdx
     addl    %edx, %eax
-    push    %eax
-    movl    $_table, %eax
-    push    %eax
+    pushq   %rax
+    leaq    table(%rip), %rax
+    pushq   %rax
     movl    $2, %eax
-    imull   $4, %eax
-    pop     %edx
-    addl    %edx, %eax
-    pop     %edx
-    movl    %edx, (%eax)
+    cltq
+    imulq   $4, %rax
+    popq    %rdx
+    addq    %rdx, %rax
+    popq    %rdx
+    movl    %edx, (%rax)
     movl    %edx, %eax
-    movl    $_table, %eax
-    push    %eax
+    leaq    table(%rip), %rax
+    pushq   %rax
     movl    $0, %eax
-    imull   $4, %eax
-    pop     %edx
-    addl    %edx, %eax
-    movl    (%eax), %eax
-    push    %eax
-    movl    $_table, %eax
-    push    %eax
+    cltq
+    imulq   $4, %rax
+    popq    %rdx
+    addq    %rdx, %rax
+    movl    (%rax), %eax
+    pushq   %rax
+    leaq    table(%rip), %rax
+    pushq   %rax
     movl    $1, %eax
-    imull   $4, %eax
-    pop     %edx
+    cltq
+    imulq   $4, %rax
+    popq    %rdx
+    addq    %rdx, %rax
+    movl    (%rax), %eax
+    popq    %rdx
     addl    %edx, %eax
-    movl    (%eax), %eax
-    pop     %edx
-    addl    %edx, %eax
-    push    %eax
-    movl    -16(%ebp), %eax
-    push    %eax
+    pushq   %rax
+    movq    -24(%rbp), %rax
+    pushq   %rax
     movl    $2, %eax
-    pop     %edx
-    imull   $4, %eax
+    popq    %rdx
+    cltq
+    imulq   $4, %rax
+    addq    %rdx, %rax
+    movl    (%rax), %eax
+    popq    %rdx
     addl    %edx, %eax
-    movl    (%eax), %eax
-    pop     %edx
-    addl    %edx, %eax
-    push    %eax
-    movl    $_table, %eax
-    push    %eax
+    pushq   %rax
+    leaq    table(%rip), %rax
+    pushq   %rax
     movl    $3, %eax
-    imull   $4, %eax
-    pop     %edx
+    cltq
+    imulq   $4, %rax
+    popq    %rdx
+    addq    %rdx, %rax
+    movl    (%rax), %eax
+    popq    %rdx
     addl    %edx, %eax
-    movl    (%eax), %eax
-    pop     %edx
-    addl    %edx, %eax
-    push    %eax
-    movl    $_zeros, %eax
-    push    %eax
+    pushq   %rax
+    leaq    zeros(%rip), %rax
+    pushq   %rax
     movl    $1, %eax
-    imull   $4, %eax
-    pop     %edx
+    cltq
+    imulq   $4, %rax
+    popq    %rdx
+    addq    %rdx, %rax
+    movl    (%rax), %eax
+    popq    %rdx
     addl    %edx, %eax
-    movl    (%eax), %eax
-    pop     %edx
-    addl    %edx, %eax
-    push    %eax
-    leal    -12(%ebp), %eax
-    push    %eax
+    pushq   %rax
+    leaq    -12(%rbp), %rax
+    pushq   %rax
     movl    $2, %eax
-    imull   $4, %eax
-    pop     %edx
-    addl    %edx, %eax
-    movl    (%eax), %eax
-    pop     %edx
+    cltq
+    imulq   $4, %rax
+    popq    %rdx
+    addq    %rdx, %rax
+    movl    (%rax), %eax
+    popq    %rdx
     addl    %edx, %eax
     jmp     .L0
     movl    $0, %eax
