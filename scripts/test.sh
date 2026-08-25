@@ -54,6 +54,8 @@ examples/struct_arrays.c struct_arrays
 examples/shadowing.c shadowing
 examples/many_args.c many_args
 tests/semantic/valid_forward_call.c valid_forward_call
+examples/declarations.c declarations
+examples/libc_call.c libc_call
 tests/preprocess/features.c pp_features
 "
 

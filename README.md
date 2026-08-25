@@ -46,6 +46,8 @@ integer-returning functions.
 |-- tests/            Test inputs and expectations
 |   |-- harness.c     Prints a compiled program's result (see Test)
 |   |-- harness_freestanding.c  Same, without libc (see Test)
+|   |-- harness_libc.c  Same, for programs that call the C library
+|   |-- start.s        Entry point for tests linked without crt1.o
 |   |-- unit/         Unit tests, run in process (type, lexer, cli)
 |   |-- golden/       Reference assembly for every example
 |   |-- expected/     Reference program output for every example
@@ -103,9 +105,10 @@ diagnostic.
 Results are compared as **printed values rather than process exit codes**.
 Exit codes are truncated to 8 unsigned bits, so they silently accept wrong
 answers: a function returning `100000` exits `160`, and one returning `-42`
-exits `214`. `examples/wide_values.c` covers that range explicitly. Donkey
-cannot yet call `printf`: semantic analysis rejects undeclared functions and
-there are no prototypes to declare it with, hence the separate harness.
+exits `214`. `examples/wide_values.c` covers that range explicitly. Donkey can call `printf` now that prototypes exist, but most examples do not,
+so the harness reports their result instead. Programs that do call the C
+library keep their own output and are linked against it -- see
+`examples/libc_call.c`.
 
 After an intentional codegen or diagnostic change, regenerate the golden files
 and review the diff before committing:
@@ -252,6 +255,16 @@ Supported expression features:
 - Multiple statements inside a function body
 - Multiple integer-returning functions per input file
 - Function parameters: `int helper(int x, int y)`
+- Function prototypes, so a function can be called before it is defined:
+  `int helper(int x);`
+- `void` as a return type, and `f(void)` for a function taking nothing
+- Variadic declarations: `int printf(const char *format, ...);`, which makes
+  the C library callable
+- Storage classes and qualifiers -- `extern`, `static`, `const`, `volatile` --
+  accepted wherever a declaration allows them
+- Several declarators in one declaration: `int a = 1, b, *p;`
+- `enum`, with explicit values: `enum Status { OK = 10, FAILED };`
+- `typedef`, including pointer aliases: `typedef int *IntPtr;`
 - Function calls with arguments: `helper(x, 4)`
 - Global variables: `int g;` and `int g = constant_expression;`
 - Conditionals: `if` and `if/else`
@@ -304,10 +317,25 @@ for `tests/preprocess/features.c`.
 Diagnostics name the file a token actually came from, so an error inside an
 included header points at the header rather than at the file that included it.
 
-**`#include <stdio.h>` does not work yet.** The preprocessor will find and read
-it, but the parser cannot yet handle what is inside: `typedef`, `extern`,
-function prototypes, `void`, and varargs are all still missing. Those come with
-the declarator work, after which the standard library becomes reachable.
+**`#include <stdio.h>` still does not work**, though it is closer. `typedef`,
+`extern`, prototypes, `void`, and varargs all exist now, so a function can be
+declared by hand and called:
+
+```c
+int printf(const char *format, ...);
+
+int main()
+{
+    printf("hello from donkey
+");
+    return 0;
+}
+```
+
+That compiles, links against the system C library, and runs -- see
+`examples/libc_call.c`. A real `stdio.h` still needs more than the declaration
+forms: compiler-specific attributes, nested struct definitions, and
+`unsigned long long` among them.
 
 ### Diagnostics
 

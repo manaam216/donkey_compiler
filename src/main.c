@@ -143,6 +143,8 @@ done_tokens:
     ty_cleanup();
     sym_cleanup();
     preprocess_free();
+    parser_reset_typedefs();
+    parser_reset_enums();
 
     if (status != EXIT_SUCCESS && diag_error_count() > 1) {
         fprintf(stderr, "%d errors\n", diag_error_count());

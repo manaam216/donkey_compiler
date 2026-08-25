@@ -14,6 +14,10 @@ struct ast_node* create_ast_node_at(ASTNodeType type, char *value, struct ast_no
 void free_ast_node(struct ast_node *node);
 
 struct ast_node* parse_program(struct token *tokens, int *token_index, const char *source_path);
+
+/* Discard typedef names and enum constants between translation units. */
+void parser_reset_typedefs(void);
+void parser_reset_enums(void);
 struct ast_node* parse_function_list(struct token *tokens, int *token_index);
 struct ast_node* parse_external_declaration(struct token *tokens, int *token_index);
 struct ast_node* parse_struct_definition(struct token *tokens, int *token_index);

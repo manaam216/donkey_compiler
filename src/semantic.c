@@ -12,6 +12,8 @@ struct global_symbol {
     const char *name;
     struct Symbol *sym;
     int is_function;
+    int is_defined;             /* a body was seen, not just a prototype */
+    int is_variadic;            /* the parameter list ended with ... */
     CType type;
     int pointer_depth;
     int array_length;
@@ -114,6 +116,7 @@ static void ensure_capacity(void **items, int count, int *capacity,
 static const char *semantic_type_name(CType type)
 {
     switch (type) {
+        case TYPE_VOID: return "void";
         case TYPE_CHAR: return "char";
         case TYPE_UCHAR: return "uchar";
         case TYPE_SHORT: return "short";
@@ -348,11 +351,30 @@ static int find_local(struct sema_ctx *ctx, const char *name)
 static void add_global(struct sema_ctx *ctx, struct ast_node *node)
 {
     const char *name = node->value;
-    int is_function = node->type == AST_FUNCTION;
+    int is_function = node->type == AST_FUNCTION || node->type == AST_FUNCTION_DECL;
     int existing = find_global(ctx, name);
     struct ast_node *param;
 
     if (existing >= 0) {
+        /*
+         * A prototype may be repeated, and may be followed by the definition.
+         * Only two definitions of the same function are an error.
+         */
+        int both_functions = ctx->globals[existing].is_function && is_function;
+
+        if (both_functions && node->type == AST_FUNCTION_DECL) {
+            /* A later prototype adds nothing; keep the entry already made. */
+            node->sym = ctx->globals[existing].sym;
+            node->ty = resolve_type(ctx, node);
+            return;
+        }
+        if (both_functions && !ctx->globals[existing].is_defined) {
+            /* The definition for a function that was only declared before. */
+            ctx->globals[existing].is_defined = node->type == AST_FUNCTION;
+            node->sym = ctx->globals[existing].sym;
+            node->ty = resolve_type(ctx, node);
+            return;
+        }
         semantic_error_at(ctx, node, "duplicate top-level declaration of '%s'", name);
         return;
     }
@@ -370,6 +392,7 @@ static void add_global(struct sema_ctx *ctx, struct ast_node *node)
     ctx->globals[ctx->global_count].sym = node->sym;
     ctx->globals[ctx->global_count].name = name;
     ctx->globals[ctx->global_count].is_function = is_function;
+    ctx->globals[ctx->global_count].is_defined = node->type == AST_FUNCTION;
     ctx->globals[ctx->global_count].type = node->data_type;
     ctx->globals[ctx->global_count].pointer_depth = node->pointer_depth;
     ctx->globals[ctx->global_count].array_length = node->array_length;
@@ -377,6 +400,11 @@ static void add_global(struct sema_ctx *ctx, struct ast_node *node)
     ctx->globals[ctx->global_count].parameter_count = 0;
     if (is_function) {
         for (param = node->left; param; param = param->right) {
+            if (param->left && param->left->value &&
+                strcmp(param->left->value, "...") == 0) {
+                ctx->globals[ctx->global_count].is_variadic = 1;
+                continue;       /* not a parameter, just a marker */
+            }
             if (ctx->globals[ctx->global_count].parameter_count >= 64) {
                 semantic_error_at(ctx, node, "function '%s' has too many parameters", name);
                 break;
@@ -553,9 +581,14 @@ static void analyze_expression(struct sema_ctx *ctx, struct ast_node *node)
                 semantic_error_at(ctx, node, "called object '%s' is not a function", node->value);
             } else {
                 actual_count = count_list(node->left, AST_ARG_LIST);
-                if (actual_count != ctx->globals[symbol].parameter_count) {
-                    semantic_error_at(ctx, node, "function '%s' expects %d argument(s), but %d provided",
-                        node->value, ctx->globals[symbol].parameter_count, actual_count);
+                if (ctx->globals[symbol].is_variadic
+                        ? actual_count < ctx->globals[symbol].parameter_count
+                        : actual_count != ctx->globals[symbol].parameter_count) {
+                    semantic_error_at(ctx, node,
+                        "function '%s' expects %s%d argument(s), but %d provided",
+                        node->value,
+                        ctx->globals[symbol].is_variadic ? "at least " : "",
+                        ctx->globals[symbol].parameter_count, actual_count);
                 }
             }
             for (struct ast_node *arg = node->left; arg; arg = arg->right) {
@@ -722,7 +755,7 @@ static void collect_top_level(struct sema_ctx *ctx, struct ast_node *node)
     } else if (node->type == AST_FUNCTION_LIST) {
         collect_top_level(ctx, node->left);
         collect_top_level(ctx, node->right);
-    } else if (node->type == AST_FUNCTION) {
+    } else if (node->type == AST_FUNCTION || node->type == AST_FUNCTION_DECL) {
         add_global(ctx, node);
     } else if (node->type == AST_STRUCT_DEF) {
         add_struct(ctx, node);
@@ -798,7 +831,7 @@ static void analyze_top_level(struct sema_ctx *ctx, struct ast_node *node)
         if (!is_constant_expression(node->left)) {
             semantic_error_at(ctx, node, "initializer for global '%s' is not a constant expression", node->value);
         }
-    } else if (node->type == AST_STRUCT_DEF) {
+    } else if (node->type == AST_STRUCT_DEF || node->type == AST_FUNCTION_DECL) {
         return;
     } else if (node->type == AST_FUNCTION) {
         int param_index = 0;
@@ -1293,7 +1326,7 @@ static void check_top_level_types(struct sema_ctx *ctx, struct ast_node *node)
                 insert_conversion(&node->left, node->data_type);
             }
         }
-    } else if (node->type == AST_STRUCT_DEF) {
+    } else if (node->type == AST_STRUCT_DEF || node->type == AST_FUNCTION_DECL) {
         return;
     } else if (node->type == AST_FUNCTION) {
         ctx->current_return_type = node->data_type;

@@ -762,6 +762,9 @@ static void generate_program(struct cg_ctx *ctx, struct ast_node *node, FILE *ou
             break;
         case AST_GLOBAL_DECL:
             break;
+        case AST_FUNCTION_DECL:
+            /* A prototype declares; there is nothing to emit for it. */
+            break;
         case AST_STRUCT_DEF:
             break;
         default:

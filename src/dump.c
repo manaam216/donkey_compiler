@@ -42,6 +42,15 @@ static const char *token_kind_name(int kind)
         case T_BREAK: return "break";
         case T_CONTINUE: return "continue";
         case T_STRUCT: return "struct";
+        case T_UNION: return "union";
+        case T_ENUM: return "enum";
+        case T_VOID: return "void";
+        case T_TYPEDEF: return "typedef";
+        case T_EXTERN: return "extern";
+        case T_STATIC: return "static";
+        case T_CONST: return "const";
+        case T_VOLATILE: return "volatile";
+        case T_ELLIPSIS: return "ellipsis";
         case T_SIZEOF: return "sizeof";
         case T_IDENTIFIER: return "identifier";
         case T_INTLIT: return "intlit";
@@ -81,7 +90,7 @@ static const char *token_kind_name(int kind)
         case T_GREATER: return "greater";
         case T_GREATER_EQUAL: return "greater_equal";
         case T_HASH: return "hash";
-        case T_HASH_HASH: return "hashhash";
+        case T_HASH_HASH: return "hash_hash";
         case T_EOF: return "eof";
         case T_INVALID: return "invalid";
         default: return "?";

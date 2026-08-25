@@ -132,7 +132,22 @@ void lex_text(const char *text, size_t length, const char *source_path,
         } else if (c == ':') {
             add_token(tokens, token_count, T_COLON, ":");
         } else if (c == '.') {
-            add_token(tokens, token_count, T_DOT, ".");
+            int second = fgetc(infile);
+
+            if (second == '.') {
+                int third = fgetc(infile);
+
+                if (third == '.') {
+                    add_token(tokens, token_count, T_ELLIPSIS, "...");
+                } else {
+                    ungetc(third, infile);
+                    ungetc(second, infile);
+                    add_token(tokens, token_count, T_DOT, ".");
+                }
+            } else {
+                ungetc(second, infile);
+                add_token(tokens, token_count, T_DOT, ".");
+            }
         } else if (c == '\'') {
             int value = 0;
             c = fgetc(infile);
@@ -357,6 +372,22 @@ void lex_text(const char *text, size_t length, const char *source_path,
                 add_token(tokens, token_count, T_INT, buffer);
             } else if (strcmp(buffer, "long") == 0) {
                 add_token(tokens, token_count, T_LONG, buffer);
+            } else if (strcmp(buffer, "void") == 0) {
+                add_token(tokens, token_count, T_VOID, buffer);
+            } else if (strcmp(buffer, "union") == 0) {
+                add_token(tokens, token_count, T_UNION, buffer);
+            } else if (strcmp(buffer, "enum") == 0) {
+                add_token(tokens, token_count, T_ENUM, buffer);
+            } else if (strcmp(buffer, "typedef") == 0) {
+                add_token(tokens, token_count, T_TYPEDEF, buffer);
+            } else if (strcmp(buffer, "extern") == 0) {
+                add_token(tokens, token_count, T_EXTERN, buffer);
+            } else if (strcmp(buffer, "static") == 0) {
+                add_token(tokens, token_count, T_STATIC, buffer);
+            } else if (strcmp(buffer, "const") == 0) {
+                add_token(tokens, token_count, T_CONST, buffer);
+            } else if (strcmp(buffer, "volatile") == 0) {
+                add_token(tokens, token_count, T_VOLATILE, buffer);
             } else if (strcmp(buffer, "signed") == 0) {
                 add_token(tokens, token_count, T_SIGNED, buffer);
             } else if (strcmp(buffer, "unsigned") == 0) {
