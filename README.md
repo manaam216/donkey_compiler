@@ -9,9 +9,11 @@ integer-returning functions.
 ```text
 .
 |-- include/          Public compiler headers
+|   |-- cli.h
 |   |-- decl.h
 |   |-- defs.h
 |   |-- diag.h
+|   |-- dump.h
 |   |-- symbol.h
 |   `-- type.h
 |-- src/              Compiler implementation
@@ -22,6 +24,8 @@ integer-returning functions.
 |   |-- type.c        Type representation, sizes, and struct layout
 |   |-- symbol.c      Storage identities and stack frame layout
 |   |-- diag.c        Diagnostics, error recovery, and warnings
+|   |-- cli.c         Command-line option parsing
+|   |-- dump.c        Token and syntax-tree debug output
 |   `-- codegen.c     Assembly generator
 |-- examples/         Source examples and reference assembly
 |   |-- sample.c
@@ -40,7 +44,7 @@ integer-returning functions.
 |-- tests/            Test inputs and expectations
 |   |-- harness.c     Prints a compiled program's result (see Test)
 |   |-- harness_freestanding.c  Same, without libc (see Test)
-|   |-- unit/         Unit tests for compiler internals
+|   |-- unit/         Unit tests, run in process (type, lexer, cli)
 |   |-- golden/       Reference assembly for every example
 |   |-- expected/     Reference program output for every example
 |   |-- syntax/       Inputs that must fail to parse
@@ -71,7 +75,7 @@ On Windows with MinGW GCC and no `make`, run:
 
 ```powershell
 New-Item -ItemType Directory -Force build
-gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\lexer.c src\parser.c src\semantic.c src\type.c src\symbol.c src\codegen.c
+gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\lexer.c src\parser.c src\semantic.c src\type.c src\symbol.c src\diag.c src\dump.c src\cli.c src\codegen.c
 ```
 
 ## Test
@@ -133,43 +137,57 @@ sanitizers, so that job is Linux-only.
 
 ## Run
 
-Compile the main example:
-
 ```sh
-./build/donkey examples/sample.c build/sample.asm
+./build/donkey examples/sample.c -o build/sample.asm
 ```
 
 On Windows:
 
 ```powershell
-.\build\donkey.exe examples\sample.c build\sample.asm
+.\build\donkey.exe examples\sample.c -o build\sample.asm
 ```
 
-Compile the broader operator example:
+Run `./build/donkey --help` for the full list. The options that exist are:
 
-```sh
-./build/donkey examples/operators.c build/operators.asm
+| Option | Effect |
+| --- | --- |
+| `-o`, `--output <file>` | Where to write the assembly (default `output.asm`) |
+| `-S` | Emit assembly; the only mode there is |
+| `-Wall` | Enable all warnings, which is already the default |
+| `-Werror` | Treat warnings as errors |
+| `-w` | Suppress warnings |
+| `--dump-tokens` | Print the token stream and stop |
+| `--dump-ast` | Print the annotated syntax tree and stop |
+| `-v`, `--verbose` | Report each stage as it runs |
+| `-h`, `--help` | Usage |
+| `--version` | Version |
+
+Options belonging to stages that do not exist yet -- `-E`, `-I`, `-D`, `-O`,
+`-g`, `-c`, `--dump-ir` -- are refused with an explanation rather than accepted
+and ignored, so a build never quietly does something other than what was asked:
+
+```text
+$ ./build/donkey -O2 examples/sample.c
+-O2: not supported yet: there is no optimiser yet
 ```
 
-Compile the assignment and short-circuit examples:
+The older form, `donkey input.c output.asm`, still works.
 
-```sh
-./build/donkey examples/assignment.c build/assignment.asm
-./build/donkey examples/short_circuit.c build/short_circuit.asm
-./build/donkey examples/locals.c build/locals.asm
-./build/donkey examples/multiple_functions.c build/multiple_functions.asm
-./build/donkey examples/control_flow.c build/control_flow.asm
-./build/donkey examples/casts.c build/casts.asm
-./build/donkey examples/comments.c build/comments.asm
-./build/donkey examples/globals.c build/globals.asm
+### Inspecting the compiler's own state
+
+`--dump-ast` runs after semantic analysis, so each node shows the type and the
+storage location resolved for it:
+
+```text
+function 'main' : int [function frame=8]   <1:5>
+  block   <2:1>
+    statement_list   <3:9>
+      decl 'x' : int [local -4(%rbp)]   <3:9>
+        intlit '3' : int   <3:13>
 ```
 
-If you omit the output path, Donkey writes to `output.asm` in the current
-directory:
-
-```sh
-./build/donkey examples/unary.c
-```
+`--dump-tokens` prints the token stream with the line and column each token
+carries, which is what every diagnostic points at.
 
 You can also build and run the sample target in one step:
 

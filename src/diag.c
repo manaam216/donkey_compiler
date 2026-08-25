@@ -13,6 +13,7 @@ static const char *diag_function;
 static int diag_errors;
 static int diag_warnings;
 static int diag_warnings_are_errors;
+static int diag_warnings_suppressed;
 static int diag_suppressed;
 
 void diag_init(const char *source_path)
@@ -62,6 +63,11 @@ void diag_set_function(const char *name)
 void diag_set_warnings_are_errors(int enabled)
 {
     diag_warnings_are_errors = enabled;
+}
+
+void diag_set_warnings_suppressed(int enabled)
+{
+    diag_warnings_suppressed = enabled;
 }
 
 int diag_error_count(void)
@@ -158,6 +164,9 @@ void diag_at(DiagLevel level, SourceLocation location, const char *format, ...)
             return;
         }
     } else if (level == DIAG_WARNING) {
+        if (diag_warnings_suppressed) {
+            return;
+        }
         diag_warnings++;
     }
 

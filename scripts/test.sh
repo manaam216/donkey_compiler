@@ -65,19 +65,38 @@ cflags="${CFLAGS:--Wall -Wextra -g}"
 
 # shellcheck disable=SC2086 # cflags is a deliberate word-split flag list
 "$cc" -Iinclude $cflags -o "$compiler" \
-    src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c src/type.c src/symbol.c src/diag.c
+    src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c src/type.c src/symbol.c src/diag.c src/dump.c src/cli.c
 
 failures=0
-
-echo "== unit tests =="
-# shellcheck disable=SC2086
-"$cc" -Iinclude $cflags -o "$build_dir/test_type" tests/unit/test_type.c src/type.c
-"$build_dir/test_type"
 
 fail() {
     echo "FAIL: $*" >&2
     failures=$((failures + 1))
 }
+
+echo "== unit tests =="
+
+# Each suite exercises compiler stages in process, so it can check things the
+# generated assembly never shows: type layout, token positions, option parsing.
+# Some suites deliberately provoke diagnostics and usage messages, so their
+# output is captured and only the summary shown -- everything on failure.
+run_unit() {
+    name="$1"
+    shift
+    # shellcheck disable=SC2086
+    "$cc" -Iinclude $cflags -o "$build_dir/$name" "tests/unit/$name.c" "$@"
+    if "$build_dir/$name" >"$build_dir/$name.log" 2>&1; then
+        # The summary, not the last line: provoked diagnostics interleave.
+        grep -E "checks passed|check\(s\) failed" "$build_dir/$name.log" | tail -1
+    else
+        fail "$name"
+        cat "$build_dir/$name.log" >&2
+    fi
+}
+
+run_unit test_type src/type.c
+run_unit test_lexer src/lexer.c src/diag.c
+run_unit test_cli src/cli.c
 
 # Compare a produced file against its golden copy, or refresh the golden copy
 # when UPDATE_GOLDEN=1.
@@ -119,7 +138,7 @@ while read -r source name; do
     exe="$build_dir/$name.exe"
     stdout_file="$build_dir/$name.out"
 
-    "$compiler" "$source" "$asm" >/dev/null
+    "$compiler" "$source" -o "$asm" >/dev/null
 
     # Golden assembly: guards every example against codegen regressions, not
     # just examples/sample.c as the previous suite did.
@@ -152,11 +171,11 @@ expect_error() {
     expected="$2"
     diagnostics="$build_dir/errors.txt"
 
-    if "$compiler" "$input" "$build_dir/invalid.asm" >/dev/null 2>"$diagnostics"; then
+    if "$compiler" "$input" -o "$build_dir/invalid.asm" >/dev/null 2>"$diagnostics"; then
         fail "expected compiler to reject $input"
         return 1
     fi
-    if ! grep -F "$expected" "$diagnostics" >/dev/null; then
+    if ! grep -F -- "$expected" "$diagnostics" >/dev/null; then
         fail "expected diagnostic '$expected' for $input"
         cat "$diagnostics" >&2
         return 1
@@ -171,7 +190,7 @@ expect_error_count() {
     minimum="$2"
     diagnostics="$build_dir/errors.txt"
 
-    if "$compiler" "$input" "$build_dir/invalid.asm" >/dev/null 2>"$diagnostics"; then
+    if "$compiler" "$input" -o "$build_dir/invalid.asm" >/dev/null 2>"$diagnostics"; then
         fail "expected compiler to reject $input"
         return 1
     fi
@@ -190,12 +209,12 @@ expect_warning() {
     expected="$2"
     diagnostics="$build_dir/warnings.txt"
 
-    if ! "$compiler" "$input" "$build_dir/warned.asm" >/dev/null 2>"$diagnostics"; then
+    if ! "$compiler" "$input" -o "$build_dir/warned.asm" >/dev/null 2>"$diagnostics"; then
         fail "$input should compile despite warnings"
         cat "$diagnostics" >&2
         return 1
     fi
-    if ! grep -F "$expected" "$diagnostics" >/dev/null; then
+    if ! grep -F -- "$expected" "$diagnostics" >/dev/null; then
         fail "expected warning '$expected' for $input"
         cat "$diagnostics" >&2
         return 1
@@ -222,6 +241,64 @@ expect_error tests/limits/global_array_too_long.c "exceeds the supported length 
 expect_error_count tests/semantic/multiple_errors.c 4
 expect_error_count tests/syntax/multiple_errors.c 2
 expect_warning tests/semantic/unreachable_after_return.c "warning: unreachable statement after 'return'"
+
+echo "== tooling =="
+
+expect_output() {
+    label="$1"
+    expected="$2"
+    shift 2
+
+    if ! "$@" > "$build_dir/tool.txt" 2>&1; then
+        fail "$label: command failed"
+        cat "$build_dir/tool.txt" >&2
+        return 1
+    fi
+    if ! grep -F -- "$expected" "$build_dir/tool.txt" >/dev/null; then
+        fail "$label: expected to find '$expected'"
+        head -20 "$build_dir/tool.txt" >&2
+        return 1
+    fi
+    echo "  ok  $label"
+}
+
+expect_output "--dump-tokens" "identifier         main"     "$compiler" --dump-tokens examples/sample.c
+# The dump runs after analysis, so nodes carry their types and storage.
+expect_output "--dump-ast types" ": int"     "$compiler" --dump-ast examples/locals.c
+expect_output "--dump-ast storage" "[local "     "$compiler" --dump-ast examples/locals.c
+expect_output "--help" "--dump-tokens" "$compiler" --help
+expect_output "--version" "donkey " "$compiler" --version
+
+# A flag with nothing behind it is refused, not quietly ignored.
+expect_rejected() {
+    label="$1"
+    expected="$2"
+    shift 2
+
+    if "$@" >"$build_dir/tool.txt" 2>&1; then
+        fail "$label: should have been rejected"
+        return 1
+    fi
+    if ! grep -F -- "$expected" "$build_dir/tool.txt" >/dev/null; then
+        fail "$label: expected '$expected'"
+        cat "$build_dir/tool.txt" >&2
+        return 1
+    fi
+    echo "  ok  $label"
+}
+
+expect_rejected "-O2 rejected" "there is no optimiser yet"     "$compiler" -O2 examples/sample.c
+expect_rejected "-E rejected" "there is no preprocessor yet"     "$compiler" -E examples/sample.c
+expect_rejected "no input" "no input file" "$compiler"
+
+# -Werror turns the warning into a failure; -w removes it.
+expect_rejected "-Werror is fatal" "unreachable statement"     "$compiler" -Werror tests/semantic/unreachable_after_return.c -o "$build_dir/we.asm"
+if "$compiler" -w tests/semantic/unreachable_after_return.c -o "$build_dir/w.asm"         2>"$build_dir/w.err" >/dev/null && [ ! -s "$build_dir/w.err" ]; then
+    echo "  ok  -w silences the warning"
+else
+    fail "-w should silence the warning and still compile"
+    cat "$build_dir/w.err" >&2
+fi
 
 if [ "$failures" -ne 0 ]; then
     echo "$failures check(s) failed." >&2
