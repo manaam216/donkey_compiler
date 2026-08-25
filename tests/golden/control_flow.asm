@@ -136,3 +136,4 @@ main:
 .L3:
     leave
     ret
+.section .note.GNU-stack,"",@progbits

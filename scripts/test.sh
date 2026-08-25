@@ -225,12 +225,32 @@ expect_warning() {
     echo "  ok  $(basename "$input") (warned, still compiled)"
 }
 
+# Like expect_error, but says what is being checked rather than repeating the
+# file name for every assertion made against it.
+expect_labelled() {
+    label="$1"
+    input="$2"
+    expected="$3"
+    diagnostics="$build_dir/errors.txt"
+
+    if "$compiler" "$input" -o "$build_dir/invalid.asm" >/dev/null 2>"$diagnostics"; then
+        fail "expected compiler to reject $input"
+        return 1
+    fi
+    if ! grep -F -- "$expected" "$diagnostics" >/dev/null; then
+        fail "$label: expected '$expected'"
+        cat "$diagnostics" >&2
+        return 1
+    fi
+    echo "  ok  $label"
+}
+
 expect_error tests/syntax/missing_semicolon.c "tests/syntax/missing_semicolon.c:4:1: error: expected ';', found '}'"
 expect_error tests/syntax/invalid_character.c "tests/syntax/invalid_character.c:3:12: error: invalid character '@'"
 expect_error tests/semantic/undeclared_variable.c "tests/semantic/undeclared_variable.c:3:12: error: use of undeclared variable 'missing'"
-# The quoted source line and caret under the offending column.
-expect_error tests/semantic/undeclared_variable.c "    return missing;"
-expect_error tests/semantic/undeclared_variable.c "In function 'main':"
+# The same file again, checking the parts of the diagnostic around the message.
+expect_labelled "diagnostic quotes the source line" tests/semantic/undeclared_variable.c "    return missing;"
+expect_labelled "diagnostic names the function" tests/semantic/undeclared_variable.c "In function 'main':"
 expect_error tests/semantic/wrong_argument_count.c "expects 2 argument(s), but 1 provided"
 expect_error tests/semantic/duplicate_declaration.c "duplicate declaration of 'value'"
 expect_error tests/semantic/break_outside_loop.c "'break' statement is not inside a loop"

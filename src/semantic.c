@@ -230,6 +230,7 @@ static void add_struct(struct sema_ctx *ctx, struct ast_node *node)
     }
     ensure_capacity((void **)&ctx->structs, ctx->struct_count,
         &ctx->struct_capacity, sizeof(*ctx->structs));
+    memset(&ctx->structs[ctx->struct_count], 0, sizeof(ctx->structs[0]));
     struct_type = ty_struct(node->value);
     node->ty = struct_type;
     ctx->structs[ctx->struct_count].name = node->value;
@@ -380,6 +381,13 @@ static void add_global(struct sema_ctx *ctx, struct ast_node *node)
     }
     ensure_capacity((void **)&ctx->globals, ctx->global_count,
         &ctx->global_capacity, sizeof(*ctx->globals));
+    /*
+     * The table grows with realloc, so a fresh entry holds whatever was in that
+     * memory. Clearing it means a field nobody sets here still reads as zero --
+     * is_variadic was left uninitialised once, which made every function look
+     * variadic on some platforms and not others.
+     */
+    memset(&ctx->globals[ctx->global_count], 0, sizeof(ctx->globals[0]));
     if (node->struct_name && find_struct(ctx, node->struct_name) < 0) {
         semantic_error_at(ctx, node, "unknown struct type '%s'", node->struct_name);
         return;
@@ -437,6 +445,7 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
     }
     ensure_capacity((void **)&ctx->locals, ctx->local_count,
         &ctx->local_capacity, sizeof(*ctx->locals));
+    memset(&ctx->locals[ctx->local_count], 0, sizeof(ctx->locals[0]));
     if (node->struct_name && find_struct(ctx, node->struct_name) < 0) {
         semantic_error_at(ctx, node, "unknown struct type '%s'", node->struct_name);
         return;

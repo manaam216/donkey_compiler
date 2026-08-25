@@ -867,16 +867,29 @@ static void mark_once(const char *path)
  */
 static char *resolve_include(const char *name, int angled, const char *from_path)
 {
-    char candidate[1024];
+    /* Room for a directory, a separator, a name, and the terminator. */
+    char candidate[2048];
     int i;
 
     if (!angled) {
         char directory[1024];
 
         directory_of(from_path, directory, sizeof(directory));
-        snprintf(candidate, sizeof(candidate), "%s/%s", directory, name);
-        if (read_file(candidate, &(size_t){0}) != NULL) {
-            return strdup(candidate);
+        /*
+         * Check the join fits rather than letting snprintf truncate: a
+         * silently shortened path would be looked up, fail, and report a
+         * missing file rather than a name that was too long.
+         */
+        if (strlen(directory) + 1 + strlen(name) < sizeof(candidate)) {
+            size_t unused = 0;
+            char *text;
+
+            snprintf(candidate, sizeof(candidate), "%s/%s", directory, name);
+            text = read_file(candidate, &unused);
+            if (text) {
+                free(text);
+                return strdup(candidate);
+            }
         }
     }
 
@@ -884,6 +897,9 @@ static char *resolve_include(const char *name, int angled, const char *from_path
         size_t unused = 0;
         char *text;
 
+        if (strlen(state.include_paths[i]) + 1 + strlen(name) >= sizeof(candidate)) {
+            continue;
+        }
         snprintf(candidate, sizeof(candidate), "%s/%s",
             state.include_paths[i], name);
         text = read_file(candidate, &unused);
