@@ -1236,7 +1236,7 @@ struct ast_node* parse_additive(struct token *tokens, int *token_index)
 
 struct ast_node* create_ast_node(ASTNodeType type, char *value, struct ast_node *left, struct ast_node *right)
 {
-    SourceLocation location = {0, 0};
+    SourceLocation location = {0, 0, NULL};
 
     if (left) {
         location = left->location;

@@ -114,9 +114,20 @@ static void test_roadmap_flags_are_rejected(void)
     check_int("-O2 stops", should_exit, 1);
     check_int("-O2 fails", status, EXIT_FAILURE);
 
+    /* -E, -I and -D became real once the preprocessor landed. */
     should_exit = 0;
-    status = parse(&options, &should_exit, 2, (char *)"-E", (char *)"main.c");
-    check_int("-E fails", status, EXIT_FAILURE);
+    parse(&options, &should_exit, 2, (char *)"-E", (char *)"main.c");
+    check_int("-E is accepted", options.preprocess_only, 1);
+
+    should_exit = 0;
+    parse(&options, &should_exit, 3, (char *)"-I", (char *)"inc", (char *)"main.c");
+    check_int("-I recorded", options.include_path_count, 1);
+    check_str("-I path", options.include_paths[0], "inc");
+
+    should_exit = 0;
+    parse(&options, &should_exit, 2, (char *)"-DNAME=1", (char *)"main.c");
+    check_int("-D recorded", options.define_count, 1);
+    check_str("-D text", options.defines[0], "NAME=1");
 
     /* -o must not be mistaken for the -O it shares a letter with. */
     should_exit = 0;

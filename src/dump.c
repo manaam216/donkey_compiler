@@ -80,6 +80,8 @@ static const char *token_kind_name(int kind)
         case T_LESS_EQUAL: return "less_equal";
         case T_GREATER: return "greater";
         case T_GREATER_EQUAL: return "greater_equal";
+        case T_HASH: return "hash";
+        case T_HASH_HASH: return "hashhash";
         case T_EOF: return "eof";
         case T_INVALID: return "invalid";
         default: return "?";

@@ -17,16 +17,26 @@ static int previous_column;
 static int token_line;
 static int token_column;
 
-static int tracked_fgetc(FILE *infile)
+/*
+ * The lexer reads from a buffer rather than a stream, so the preprocessor can
+ * hand it text it produced itself -- an included file, or the result of macro
+ * expansion -- with no temporary file in between.
+ */
+static const char *lex_text_buffer;
+static size_t lex_text_length;
+static size_t lex_text_position;
+
+static int buffer_getc(void)
 {
     int c;
 
     previous_line = current_line;
     previous_column = current_column;
-    c = fgetc(infile);
-    if (c == EOF) {
+
+    if (!lex_text_buffer || lex_text_position >= lex_text_length) {
         return EOF;
     }
+    c = (unsigned char)lex_text_buffer[lex_text_position++];
 
     if (c == '\n') {
         current_line++;
@@ -40,18 +50,19 @@ static int tracked_fgetc(FILE *infile)
     return c;
 }
 
-static void tracked_ungetc(int c, FILE *infile)
+static void buffer_ungetc(int c)
 {
-    if (c == EOF) {
+    if (c == EOF || lex_text_position == 0) {
         return;
     }
-    ungetc(c, infile);
+    lex_text_position--;
     current_line = previous_line;
     current_column = previous_column;
 }
 
-#define fgetc tracked_fgetc
-#define ungetc tracked_ungetc
+/* The lexer body is written against stdio names; point them at the buffer. */
+#define fgetc(stream)     buffer_getc()
+#define ungetc(c, stream) buffer_ungetc(c)
 
 /*
  * An invalid character is reported and then skipped, so one bad byte does not
@@ -65,6 +76,7 @@ static void lex_error_at(int line, int column, const char *format, ...)
 
     location.line = line;
     location.column = column;
+    location.file = lexer_source_path;
 
     va_start(args, format);
     vsnprintf(message, sizeof(message), format, args);
@@ -73,12 +85,16 @@ static void lex_error_at(int line, int column, const char *format, ...)
     diag_at(DIAG_ERROR, location, "%s", message);
 }
 
-void lex(FILE *infile, const char *source_path, struct token **tokens, int *token_count)
+void lex_text(const char *text, size_t length, const char *source_path,
+    struct token **tokens, int *token_count)
 {
     char c;
     char buffer[256];
     int buffer_index = 0;
 
+    lex_text_buffer = text;
+    lex_text_length = length;
+    lex_text_position = 0;
     lexer_source_path = source_path;
     current_line = 1;
     current_column = 0;
@@ -198,6 +214,13 @@ void lex(FILE *infile, const char *source_path, struct token **tokens, int *toke
             } else {
                 ungetc(c, infile);
                 add_token(tokens, token_count, T_MINUS, "-");
+            }
+        } else if (c == '#') {
+            if ((c = fgetc(infile)) == '#') {
+                add_token(tokens, token_count, T_HASH_HASH, "##");
+            } else {
+                ungetc(c, infile);
+                add_token(tokens, token_count, T_HASH, "#");
             }
         } else if (c == '~') {
             add_token(tokens, token_count, T_BITWISE_COMPLEMENT, "~");
@@ -391,7 +414,15 @@ void add_token(struct token **tokens, int *token_count, TokenType type, const ch
     (*tokens)[*token_count].type = type;
     (*tokens)[*token_count].location.line = token_line;
     (*tokens)[*token_count].location.column = token_column;
+    (*tokens)[*token_count].location.file = lexer_source_path;
     (*tokens)[*token_count].value = strdup(value);
+    /*
+     * The preprocessor needs to know where lines begin, and the token stream
+     * has no newlines in it. Recording it here is the cheapest place: a token
+     * starts a line if nothing has been emitted on that line yet.
+     */
+    (*tokens)[*token_count].at_line_start =
+        *token_count == 0 || (*tokens)[*token_count - 1].location.line != token_line;
     (*token_count)++;
 }
 
@@ -401,4 +432,34 @@ void free_tokens(struct token *tokens, int token_count)
         free(tokens[i].value);
     }
     free(tokens);
+}
+
+/*
+ * Convenience wrapper: slurp the stream, then lex it. The buffer form is what
+ * the preprocessor uses.
+ */
+void lex(FILE *infile, const char *source_path, struct token **tokens, int *token_count)
+{
+    char *text;
+    long size;
+    size_t read;
+
+    *tokens = NULL;
+    *token_count = 0;
+
+    if (fseek(infile, 0, SEEK_END) != 0 || (size = ftell(infile)) < 0) {
+        return;
+    }
+    rewind(infile);
+
+    text = malloc((size_t)size + 1);
+    if (!text) {
+        fprintf(stderr, "Out of memory reading %s\n", source_path);
+        exit(EXIT_FAILURE);
+    }
+    read = fread(text, 1, (size_t)size, infile);
+    text[read] = '\0';
+
+    lex_text(text, read, source_path, tokens, token_count);
+    free(text);
 }

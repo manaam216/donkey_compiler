@@ -67,6 +67,8 @@ typedef enum {
     T_LESS_EQUAL,
     T_GREATER,
     T_GREATER_EQUAL,
+    T_HASH,
+    T_HASH_HASH,
     T_EOF,
     T_INVALID
 } TokenType;
@@ -149,6 +151,14 @@ typedef enum {
 typedef struct {
     int line;
     int column;
+
+    /*
+     * The file this position is in. Once #include exists a token may come from
+     * somewhere other than the file named on the command line, and a
+     * diagnostic that quoted the wrong file would be worse than one that
+     * quoted nothing. NULL means the translation unit's own file.
+     */
+    const char *file;
 } SourceLocation;
 
 struct ast_node {
@@ -190,6 +200,14 @@ struct token {
     TokenType type;
     SourceLocation location;
     char *value;
+
+    /*
+     * First token on its line. A preprocessing directive is recognised by a
+     * '#' in that position, and a directive runs until the next token that
+     * starts a line -- which is how the token stream stands in for the
+     * newlines the lexer discards.
+     */
+    int at_line_start;
 };
 
 #endif

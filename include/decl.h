@@ -2,6 +2,10 @@
 #define DONKEY_DECL_H
 
 void lex(FILE *infile, const char *source_path, struct token **tokens, int *token_count);
+
+/* Lex a buffer directly; what the preprocessor feeds its output through. */
+void lex_text(const char *text, size_t length, const char *source_path,
+    struct token **tokens, int *token_count);
 void add_token(struct token **tokens, int *token_count, TokenType type, const char *value);
 void free_tokens(struct token *tokens, int token_count);
 

@@ -14,10 +14,12 @@ integer-returning functions.
 |   |-- defs.h
 |   |-- diag.h
 |   |-- dump.h
+|   |-- preprocess.h
 |   |-- symbol.h
 |   `-- type.h
 |-- src/              Compiler implementation
 |   |-- main.c        CLI entry point
+|   |-- preprocess.c  Directives, macro expansion, #include
 |   |-- lexer.c       Tokenizer
 |   |-- parser.c      Recursive descent parser and AST allocation
 |   |-- semantic.c    Name, scope, type, and function-call validation
@@ -49,7 +51,8 @@ integer-returning functions.
 |   |-- expected/     Reference program output for every example
 |   |-- syntax/       Inputs that must fail to parse
 |   |-- semantic/     Inputs that must fail semantic analysis
-|   `-- limits/       Inputs that must hit a compiler capacity limit
+|   |-- limits/       Inputs that must hit a compiler capacity limit
+|   `-- preprocess/   Preprocessor inputs, checked against the system cpp
 |-- build/            Generated binaries and assembly output
 `-- Makefile
 ```
@@ -75,7 +78,7 @@ On Windows with MinGW GCC and no `make`, run:
 
 ```powershell
 New-Item -ItemType Directory -Force build
-gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\lexer.c src\parser.c src\semantic.c src\type.c src\symbol.c src\diag.c src\dump.c src\cli.c src\codegen.c
+gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\preprocess.c src\lexer.c src\parser.c src\semantic.c src\type.c src\symbol.c src\diag.c src\dump.c src\cli.c src\codegen.c
 ```
 
 ## Test
@@ -101,8 +104,8 @@ Results are compared as **printed values rather than process exit codes**.
 Exit codes are truncated to 8 unsigned bits, so they silently accept wrong
 answers: a function returning `100000` exits `160`, and one returning `-42`
 exits `214`. `examples/wide_values.c` covers that range explicitly. Donkey
-itself cannot call `printf` — it has no preprocessor, and semantic analysis
-rejects undeclared functions — hence the separate harness.
+cannot yet call `printf`: semantic analysis rejects undeclared functions and
+there are no prototypes to declare it with, hence the separate harness.
 
 After an intentional codegen or diagnostic change, regenerate the golden files
 and review the diff before committing:
@@ -152,7 +155,10 @@ Run `./build/donkey --help` for the full list. The options that exist are:
 | Option | Effect |
 | --- | --- |
 | `-o`, `--output <file>` | Where to write the assembly (default `output.asm`) |
-| `-S` | Emit assembly; the only mode there is |
+| `-S` | Emit assembly; the only code-generating mode |
+| `-E` | Preprocess only, and print the result |
+| `-I <dir>` | Add a directory to the include search path |
+| `-D <name>[=value]` | Define a macro; without a value it becomes `1` |
 | `-Wall` | Enable all warnings, which is already the default |
 | `-Werror` | Treat warnings as errors |
 | `-w` | Suppress warnings |
@@ -162,8 +168,8 @@ Run `./build/donkey --help` for the full list. The options that exist are:
 | `-h`, `--help` | Usage |
 | `--version` | Version |
 
-Options belonging to stages that do not exist yet -- `-E`, `-I`, `-D`, `-O`,
-`-g`, `-c`, `--dump-ir` -- are refused with an explanation rather than accepted
+Options belonging to stages that do not exist yet -- `-O`, `-g`, `-c`,
+`--dump-ir` -- are refused with an explanation rather than accepted
 and ignored, so a build never quietly does something other than what was asked:
 
 ```text
@@ -271,6 +277,37 @@ wrong number of arguments, non-constant global initializers, and `break` or
 `continue` statements outside loops. Function signatures are collected before
 function bodies are checked, so calls to functions defined later in the file
 are valid.
+
+### Preprocessing
+
+Donkey runs a preprocessor over the source before parsing it. It works on
+tokens rather than raw text, because text substitution cannot get `#` and `##`
+right and has no reliable way to tell a macro name from the same letters inside
+a string literal.
+
+Supported: `#include` in both `"file"` and `<file>` forms, `#define` for object
+and function-like macros, `#undef`, `#if` / `#ifdef` / `#ifndef` / `#elif` /
+`#else` / `#endif` with full constant-expression evaluation and `defined`,
+`#pragma once`, `#error`, `#warning`, and the `#` and `##` operators.
+`__STDC__` and `__DONKEY__` are predefined. A macro is not re-expanded inside
+its own expansion, so a self-referential definition terminates.
+
+`-E` prints the result:
+
+```sh
+./build/donkey -E examples/sample.c
+```
+
+The test suite compares that output against the system `cpp`, token for token,
+for `tests/preprocess/features.c`.
+
+Diagnostics name the file a token actually came from, so an error inside an
+included header points at the header rather than at the file that included it.
+
+**`#include <stdio.h>` does not work yet.** The preprocessor will find and read
+it, but the parser cannot yet handle what is inside: `typedef`, `extern`,
+function prototypes, `void`, and varargs are all still missing. Those come with
+the declarator work, after which the standard library becomes reachable.
 
 ### Diagnostics
 

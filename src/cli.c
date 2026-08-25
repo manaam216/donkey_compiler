@@ -4,7 +4,7 @@
 #include <string.h>
 #include "cli.h"
 
-#define DONKEY_VERSION "0.6.0"
+#define DONKEY_VERSION "0.7.0"
 
 enum {
     OPT_DUMP_TOKENS = 1000,
@@ -19,6 +19,7 @@ static const struct option long_options[] = {
     { "help",        no_argument,       NULL, 'h' },
     { "version",     no_argument,       NULL, OPT_VERSION },
     { "output",      required_argument, NULL, 'o' },
+    { "include",     required_argument, NULL, 'I' },
     { NULL,          0,                 NULL, 0 }
 };
 
@@ -55,9 +56,6 @@ static int reject_unimplemented(const char *argument)
         const char *prefix;
         const char *reason;
     } pending[] = {
-        { "-E", "there is no preprocessor yet" },
-        { "-I", "include paths need a preprocessor" },
-        { "-D", "macro definitions need a preprocessor" },
         { "-O", "there is no optimiser yet" },
         { "-g", "debug information is not generated yet" },
         { "-c", "Donkey emits assembly; it does not assemble or link" },
@@ -110,13 +108,34 @@ int cli_parse(int argc, char *argv[], struct options *options, int *should_exit)
      */
     optind = 0;
 
-    while ((option = getopt_long(argc, argv, "o:SW:whv", long_options, NULL)) != -1) {
+    while ((option = getopt_long(argc, argv, "o:I:D:ESW:whv", long_options, NULL)) != -1) {
         switch (option) {
             case 'o':
                 options->output = optarg;
                 break;
             case 'S':
-                break;      /* the only output mode there is */
+                break;      /* the only code-generating mode there is */
+            case 'E':
+                options->preprocess_only = 1;
+                break;
+            case 'I':
+                if (options->include_path_count >= MAX_INCLUDE_PATHS) {
+                    fprintf(stderr, "too many -I options (limit is %d)\n",
+                        MAX_INCLUDE_PATHS);
+                    *should_exit = 1;
+                    return EXIT_FAILURE;
+                }
+                options->include_paths[options->include_path_count++] = optarg;
+                break;
+            case 'D':
+                options->defines[options->define_count++] = optarg;
+                if (options->define_count >= MAX_DEFINES) {
+                    fprintf(stderr, "too many -D options (limit is %d)\n",
+                        MAX_DEFINES);
+                    *should_exit = 1;
+                    return EXIT_FAILURE;
+                }
+                break;
             case 'W':
                 if (strcmp(optarg, "error") == 0) {
                     options->warnings_are_errors = 1;

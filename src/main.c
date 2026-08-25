@@ -7,6 +7,7 @@
 #include "diag.h"
 #include "dump.h"
 #include "cli.h"
+#include "preprocess.h"
 
 /*
  * Each stage reports everything it finds rather than stopping at the first
@@ -14,10 +15,33 @@
  * where it is safe to: there is no point type-checking a tree the parser could
  * not build, or generating code for one that failed to type-check.
  */
+/*
+ * Print the preprocessed token stream for -E. Original spacing is gone by this
+ * point, so tokens are laid back out one line per source line -- enough to read
+ * the result and diff it against another preprocessor.
+ */
+static void print_preprocessed(const struct token *tokens, int token_count)
+{
+    int i;
+
+    for (i = 0; i < token_count; i++) {
+        if (tokens[i].type == T_EOF) {
+            break;
+        }
+        if (i > 0 && tokens[i].at_line_start) {
+            printf("\n");
+        } else if (i > 0) {
+            printf(" ");
+        }
+        printf("%s", tokens[i].value ? tokens[i].value : "");
+    }
+    printf("\n");
+}
+
 int main(int argc, char *argv[])
 {
     struct options options;
-    FILE *infile;
+    struct pp_options pp_options;
     struct token *tokens = NULL;
     int token_count = 0;
     int token_index = 0;
@@ -30,20 +54,29 @@ int main(int argc, char *argv[])
         return status;
     }
 
-    infile = fopen(options.input, "r");
-    if (!infile) {
-        perror(options.input);
-        return EXIT_FAILURE;
-    }
-
     diag_init(options.input);
     diag_set_warnings_are_errors(options.warnings_are_errors);
     diag_set_warnings_suppressed(options.suppress_warnings);
 
     if (options.verbose) {
-        fprintf(stderr, "lexing %s\n", options.input);
+        fprintf(stderr, "preprocessing %s\n", options.input);
     }
-    lex(infile, options.input, &tokens, &token_count);
+
+    pp_options.include_paths = options.include_paths;
+    pp_options.include_path_count = options.include_path_count;
+    pp_options.defines = options.defines;
+    pp_options.define_count = options.define_count;
+    preprocess_file(options.input, &pp_options, &tokens, &token_count);
+
+    /*
+     * -E stops here: the point is to see what the preprocessor produced, which
+     * is worth having even when the result would not go on to parse.
+     */
+    if (options.preprocess_only) {
+        print_preprocessed(tokens, token_count);
+        status = diag_has_errors() ? EXIT_FAILURE : EXIT_SUCCESS;
+        goto done_tokens;
+    }
 
     if (options.dump_tokens) {
         dump_tokens(tokens, token_count);
@@ -109,7 +142,7 @@ done_tokens:
     free_tokens(tokens, token_count);
     ty_cleanup();
     sym_cleanup();
-    fclose(infile);
+    preprocess_free();
 
     if (status != EXIT_SUCCESS && diag_error_count() > 1) {
         fprintf(stderr, "%d errors\n", diag_error_count());

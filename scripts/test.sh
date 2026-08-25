@@ -54,6 +54,7 @@ examples/struct_arrays.c struct_arrays
 examples/shadowing.c shadowing
 examples/many_args.c many_args
 tests/semantic/valid_forward_call.c valid_forward_call
+tests/preprocess/features.c pp_features
 "
 
 rm -rf "$build_dir"
@@ -65,7 +66,7 @@ cflags="${CFLAGS:--Wall -Wextra -g}"
 
 # shellcheck disable=SC2086 # cflags is a deliberate word-split flag list
 "$cc" -Iinclude $cflags -o "$compiler" \
-    src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c src/type.c src/symbol.c src/diag.c src/dump.c src/cli.c
+    src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c src/type.c src/symbol.c src/diag.c src/dump.c src/cli.c src/preprocess.c
 
 failures=0
 
@@ -288,8 +289,49 @@ expect_rejected() {
 }
 
 expect_rejected "-O2 rejected" "there is no optimiser yet"     "$compiler" -O2 examples/sample.c
-expect_rejected "-E rejected" "there is no preprocessor yet"     "$compiler" -E examples/sample.c
 expect_rejected "no input" "no input file" "$compiler"
+
+echo "== preprocessor =="
+
+# The strongest check available: the same input through the system cpp must
+# yield the same tokens. Whitespace is stripped because the original spacing is
+# gone by the time Donkey has a token stream.
+compare_with_cpp() {
+    input="$1"
+    shift
+
+    "$compiler" -E "$input" "$@" > "$build_dir/pp_mine.txt" 2>&1 || {
+        fail "preprocessing $input failed"
+        cat "$build_dir/pp_mine.txt" >&2
+        return 1
+    }
+    if ! "$cc" -E -P "$@" "$input" > "$build_dir/pp_ref.txt" 2>/dev/null; then
+        echo "  --  $(basename "$input") (no reference cpp available)"
+        return 0
+    fi
+
+    tr -d "[:space:]" < "$build_dir/pp_mine.txt" > "$build_dir/pp_mine.norm"
+    tr -d "[:space:]" < "$build_dir/pp_ref.txt" > "$build_dir/pp_ref.norm"
+
+    if ! diff -q "$build_dir/pp_mine.norm" "$build_dir/pp_ref.norm" >/dev/null; then
+        fail "$(basename "$input"): preprocessed output differs from $cc -E"
+        diff "$build_dir/pp_ref.norm" "$build_dir/pp_mine.norm" | head -5 >&2
+        return 1
+    fi
+    echo "  ok  $(basename "$input") (matches $cc -E)"
+}
+
+compare_with_cpp tests/preprocess/features.c -Itests/preprocess
+
+expect_output "-D on the command line" "5 * 10"     "$compiler" -E tests/preprocess/defines.c -DLEVEL=5
+expect_output "-D without a value defines 1" "10 + 1"     "$compiler" -E tests/preprocess/defines.c -DLEVEL=5 -DFLAG
+
+expect_error tests/preprocess/bad_directive.c "unknown preprocessing directive"
+expect_error tests/preprocess/unterminated_if.c "unterminated #if"
+expect_error tests/preprocess/missing_include.c "cannot find include file"
+expect_error tests/preprocess/error_directive.c "#error deliberate failure"
+# A diagnostic from an included file must name that file, not the includer.
+expect_error tests/preprocess/bad_header.c "include/broken.h:"
 
 # -Werror turns the warning into a failure; -w removes it.
 expect_rejected "-Werror is fatal" "unreachable statement"     "$compiler" -Werror tests/semantic/unreachable_after_return.c -o "$build_dir/we.asm"
