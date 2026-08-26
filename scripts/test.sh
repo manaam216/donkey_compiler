@@ -62,6 +62,7 @@ examples/struct_by_value.c struct_by_value
 examples/floating_point.c floating_point
 examples/initializers.c initializers
 examples/compound_literals.c compound_literals
+examples/struct_abi.c struct_abi
 examples/struct_pointers.c struct_pointers
 examples/struct_copy.c struct_copy
 examples/libc_call.c libc_call
@@ -269,7 +270,7 @@ expect_error tests/semantic/invalid_dereference.c "cannot dereference non-pointe
 expect_error tests/semantic/invalid_pointer_addition.c "invalid operands to pointer arithmetic"
 expect_error tests/semantic/too_many_array_initializers.c "initializer for 'values' is outside the array"
 expect_error tests/semantic/invalid_pointer_subtraction.c "cannot subtract incompatible pointer types"
-expect_error tests/semantic/struct_by_value.c "cannot pass a struct larger than 8 bytes by value yet"
+expect_error tests/semantic/struct_by_value.c "cannot pass a struct larger than 16 bytes by value yet"
 expect_error tests/limits/global_array_too_long.c "exceeds the supported length of 256"
 expect_error_count tests/semantic/multiple_errors.c 4
 expect_error_count tests/syntax/multiple_errors.c 2

@@ -35,8 +35,8 @@ main:
     movl    $4, %eax
     movl    %eax, -16(%rbp)
     leaq    -20(%rbp), %rax
-    movq    (%rax), %rax
-    pushq   %rax
+    movq    0(%rax), %rdx
+    pushq   %rdx
     popq    %rdi
     movl    $0, %eax
     call    sum
@@ -54,8 +54,8 @@ main:
     movl    $5, %eax
     movl    %eax, -28(%rbp)
     leaq    -28(%rbp), %rax
-    movq    (%rax), %rax
-    pushq   %rax
+    movq    0(%rax), %rdx
+    pushq   %rdx
     popq    %rdi
     movl    $0, %eax
     call    sum

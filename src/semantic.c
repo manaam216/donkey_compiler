@@ -533,6 +533,9 @@ static void add_parameter(struct sema_ctx *ctx, struct ast_node *node, int index
         node->sym->integer_index = ctx->integer_param_count;
         if (ty_is_float(resolved)) {
             ctx->float_param_count++;
+        } else if (resolved->kind == TY_STRUCT) {
+            /* One integer register per eightbyte of the struct. */
+            ctx->integer_param_count += (resolved->size + 7) / 8;
         } else {
             ctx->integer_param_count++;
         }
@@ -1284,9 +1287,9 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
                  */
                 if (argument->left && argument->left->ty &&
                     argument->left->ty->kind == TY_STRUCT &&
-                    argument->left->ty->size > 8) {
+                    argument->left->ty->size > 16) {
                     semantic_error_at(ctx, argument->left,
-                        "cannot pass a struct larger than 8 bytes by value yet; "
+                        "cannot pass a struct larger than 16 bytes by value yet; "
                         "pass a pointer to it");
                 }
                 if (global >= 0 && ctx->globals[global].is_function &&

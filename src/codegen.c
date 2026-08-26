@@ -89,6 +89,8 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
 static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
 static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
 static int count_args(struct ast_node *node);
+static int arg_slots(struct ast_node *value);
+static int count_arg_slots(struct ast_node *node);
 static void generate_lvalue_address(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
 static void generate_cast(const char *type, FILE *output);
 static const char *codegen_type_name(CType type);
@@ -1170,6 +1172,8 @@ static void generate_stack_note(FILE *output)
  */
 static const char *arg_reg64[6] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
 static const char *arg_reg32[6] = { "%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d" };
+static const char *arg_reg16[6] = { "%di", "%si", "%dx", "%cx", "%r8w", "%r9w" };
+static const char *arg_reg8[6]  = { "%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b" };
 
 /* Spill an incoming register argument into the frame slot it was given. */
 static void emit_spill_parameter(struct Symbol *sym, FILE *output)
@@ -1179,6 +1183,37 @@ static void emit_spill_parameter(struct Symbol *sym, FILE *output)
 
     if (i >= 6) {
         return;             /* already on the stack, addressed in place */
+    }
+
+    /*
+     * A struct arrived in one register per eightbyte; write them back into its
+     * slot in order so it looks like any other object in memory.
+     */
+    if (sym->ty && sym->ty->kind == TY_STRUCT) {
+        int slots = (sym->ty->size + 7) / 8;
+        int slot;
+
+        for (slot = 0; slot < slots; slot++) {
+            int remaining = sym->ty->size - slot * 8;
+            int reg = sym->integer_index + slot;
+            int at = sym->offset + slot * 8;
+
+            /*
+             * The last eightbyte may be partial. Writing all eight bytes of it
+             * would run past the end of the struct and into whatever the frame
+             * put next -- a four-byte struct owns four bytes, not eight.
+             */
+            if (remaining >= 8) {
+                fprintf(output, "    movq    %s, %d(%%rbp)\n", arg_reg64[reg], at);
+            } else if (remaining > 2) {
+                fprintf(output, "    movl    %s, %d(%%rbp)\n", arg_reg32[reg], at);
+            } else if (remaining == 2) {
+                fprintf(output, "    movw    %s, %d(%%rbp)\n", arg_reg16[reg], at);
+            } else {
+                fprintf(output, "    movb    %s, %d(%%rbp)\n", arg_reg8[reg], at);
+            }
+        }
+        return;
     }
 
     /*
@@ -1356,6 +1391,17 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
                     emit_store_offset(element, offset + (index * stride), output);
                     index++;
                 }
+            } else if (node->ty && node->ty->kind == TY_STRUCT && node->left &&
+                       node->left->type == AST_CALL) {
+                /* Initialised from a call: the result arrived in %rax:%rdx. */
+                int slots = (node->ty->size + 7) / 8;
+
+                generate_exp(ctx, node->left, output);
+                fprintf(output, "    movq    %%rax, %d(%%rbp)\n", node->sym->offset);
+                if (slots > 1) {
+                    fprintf(output, "    movq    %%rdx, %d(%%rbp)\n",
+                        node->sym->offset + 8);
+                }
             } else if (node->ty && node->ty->kind == TY_STRUCT && node->left) {
                 /*
                  * Brace initialisation of a struct. Without a designator each
@@ -1410,7 +1456,20 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
              * whatever the caller must not look at, which is exactly what a
              * void return means.
              */
-            if (node->left) {
+            if (node->left && node->left->ty &&
+                node->left->ty->kind == TY_STRUCT) {
+                /*
+                 * A struct of up to sixteen bytes comes back in %rax and %rdx,
+                 * one eightbyte each, the same classification used to pass one.
+                 */
+                int slots = (node->left->ty->size + 7) / 8;
+
+                generate_lvalue_address(ctx, node->left, output);
+                if (slots > 1) {
+                    fprintf(output, "    movq    8(%%rax), %%rdx\n");
+                }
+                fprintf(output, "    movq    (%%rax), %%rax\n");
+            } else if (node->left) {
                 generate_exp(ctx, node->left, output);
             }
             fprintf(output, "    jmp     .L%d\n", ctx->current_function_end_label);
@@ -1786,14 +1845,18 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             break;
         case AST_CALL: {
             int arg_count = count_args(node->left);
-            int stack_args = arg_count > 6 ? arg_count - 6 : 0;
+            /* Registers are assigned per eightbyte, not per argument. */
+            int slot_count = count_arg_slots(node->left);
+            int stack_args = slot_count > 6 ? slot_count - 6 : 0;
             /*
              * %rsp is 16-byte aligned here. Each push moves it by 8, so an odd
              * number of stack arguments would leave it misaligned at the call,
              * which System V forbids.
              */
             int padding = (stack_args % 2) ? 8 : 0;
-            int registers = arg_count < 6 ? arg_count : 6;
+            int registers = slot_count < 6 ? slot_count : 6;
+
+            (void)arg_count;
             int float_registers = 0;
             int i;
 
@@ -1816,14 +1879,22 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
                 int integer_index = 0;
                 int float_index = 0;
 
-                for (i = 0; i < registers && arg; i++, arg = arg->right) {
+                for (i = 0; i < registers && arg; arg = arg->right) {
                     struct ast_node *value = arg->type == AST_ARG_LIST ? arg->left : arg;
 
                     if (ty_is_float(value->ty)) {
                         fprintf(output, "    movsd   (%%rsp), %%xmm%d\n", float_index++);
                         fprintf(output, "    addq    $8, %%rsp\n");
+                        i++;
                     } else {
-                        fprintf(output, "    popq    %s\n", arg_reg64[integer_index++]);
+                        /* A struct takes one register per eightbyte. */
+                        int slots = arg_slots(value);
+                        int slot;
+
+                        for (slot = 0; slot < slots && i < registers; slot++, i++) {
+                            fprintf(output, "    popq    %s\n",
+                                arg_reg64[integer_index++]);
+                        }
                     }
                 }
                 float_registers = float_index;
@@ -1926,6 +1997,25 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
              * moved. Both sides are addresses in that case, not values.
              */
             if (node->left->ty && node->left->ty->kind == TY_STRUCT) {
+                /*
+                 * A call returns its struct in %rax and %rdx, so there is no
+                 * address to copy from -- the value is already in registers.
+                 */
+                if (node->right->type == AST_CALL) {
+                    int slots = (node->left->ty->size + 7) / 8;
+
+                    generate_exp(ctx, node->right, output);
+                    fprintf(output, "    movq    %%rax, %%rcx\n");
+                    if (slots > 1) {
+                        fprintf(output, "    movq    %%rdx, %%rsi\n");
+                    }
+                    generate_lvalue_address(ctx, node->left, output);
+                    fprintf(output, "    movq    %%rcx, (%%rax)\n");
+                    if (slots > 1) {
+                        fprintf(output, "    movq    %%rsi, 8(%%rax)\n");
+                    }
+                    break;
+                }
                 generate_lvalue_address(ctx, node->right, output);
                 fprintf(output, "    pushq   %%rax\n");
                 generate_lvalue_address(ctx, node->left, output);
@@ -2041,6 +2131,30 @@ static int count_args(struct ast_node *node)
     return count;
 }
 
+/*
+ * How many argument slots a value occupies. System V splits a struct into
+ * eightbytes and classifies each: with no floating fields every one is INTEGER,
+ * so a struct of up to sixteen bytes takes one register per eightbyte and
+ * everything else takes exactly one.
+ */
+static int arg_slots(struct ast_node *value)
+{
+    if (value->ty && value->ty->kind == TY_STRUCT) {
+        return (value->ty->size + 7) / 8;
+    }
+    return 1;
+}
+
+static int count_arg_slots(struct ast_node *node)
+{
+    int slots = 0;
+
+    for (; node; node = node->right) {
+        slots += arg_slots(node->type == AST_ARG_LIST ? node->left : node);
+    }
+    return slots;
+}
+
 static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
     if (!node) {
@@ -2059,9 +2173,28 @@ static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *o
      * so load its contents rather than evaluating it as an address.
      */
     if (node->left->ty && node->left->ty->kind == TY_STRUCT) {
+        int slots = arg_slots(node->left);
+        int slot;
+
+        /* A call already left the struct in %rax and %rdx. */
+        if (node->left->type == AST_CALL) {
+            generate_exp(ctx, node->left, output);
+            if (slots > 1) {
+                fprintf(output, "    pushq   %%rdx\n");
+            }
+            fprintf(output, "    pushq   %%rax\n");
+            return count + 1;
+        }
+
         generate_lvalue_address(ctx, node->left, output);
-        fprintf(output, "    movq    (%%rax), %%rax\n");
-        fprintf(output, "    pushq   %%rax\n");
+        /*
+         * Push the eightbytes highest first, so the lowest ends up on top and
+         * pops into the first register.
+         */
+        for (slot = slots - 1; slot >= 0; slot--) {
+            fprintf(output, "    movq    %d(%%rax), %%rdx\n", slot * 8);
+            fprintf(output, "    pushq   %%rdx\n");
+        }
     } else if (ty_is_float(node->left->ty)) {
         /*
          * A floating argument is always passed as a double: that is what the

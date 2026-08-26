@@ -86,8 +86,8 @@ main:
     movl    %edx, (%rax)
     movl    %edx, %eax
     leaq    -8(%rbp), %rax
-    movq    (%rax), %rax
-    pushq   %rax
+    movq    0(%rax), %rdx
+    pushq   %rdx
     popq    %rdi
     movl    $0, %eax
     call    sum
@@ -95,8 +95,8 @@ main:
     movl    $2, %eax
     pushq   %rax
     leaq    -8(%rbp), %rax
-    movq    (%rax), %rax
-    pushq   %rax
+    movq    0(%rax), %rdx
+    pushq   %rdx
     popq    %rdi
     popq    %rsi
     movl    $0, %eax
@@ -105,8 +105,8 @@ main:
     addl    %edx, %eax
     pushq   %rax
     leaq    -12(%rbp), %rax
-    movq    (%rax), %rax
-    pushq   %rax
+    movq    0(%rax), %rdx
+    pushq   %rdx
     popq    %rdi
     movl    $0, %eax
     call    just_one

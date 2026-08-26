@@ -750,9 +750,17 @@ struct ast_node* parse_external_declaration(struct token *tokens, int *token_ind
 
     if (tokens[*token_index].type == T_STRUCT) {
         name_index += 2;
+        while (tokens[name_index].type == T_STAR) {
+            name_index++;
+        }
         if (tokens[name_index].type != T_IDENTIFIER) {
             parse_error_at(&tokens[name_index], "expected identifier in top-level declaration, found '%s'",
                 tokens[name_index].value);
+            return NULL;
+        }
+        /* A struct type can be a return type as well as a variable's type. */
+        if (tokens[name_index + 1].type == T_OPENPAREN) {
+            return parse_function(tokens, token_index);
         }
         return parse_global_declaration(tokens, token_index);
     }
@@ -830,7 +838,15 @@ struct ast_node* parse_struct_definition(struct token *tokens, int *token_index)
 
 struct ast_node* parse_function(struct token *tokens, int *token_index)
 {
-    const char *type_name = parse_type_name(tokens, token_index);
+    const char *return_struct = NULL;
+    const char *type_name;
+
+    if (tokens[*token_index].type == T_STRUCT) {
+        return_struct = parse_struct_name(tokens, token_index);
+        type_name = "int";
+    } else {
+        type_name = parse_type_name(tokens, token_index);
+    }
     struct token *tok;
     int pointer_depth;
 
@@ -877,6 +893,7 @@ struct ast_node* parse_function(struct token *tokens, int *token_index)
         (*token_index)++;
         prototype->data_type = type_from_name(type_name);
         prototype->pointer_depth = pointer_depth;
+        prototype->struct_name = return_struct ? strdup(return_struct) : NULL;
         return prototype;
     }
 
@@ -885,6 +902,7 @@ struct ast_node* parse_function(struct token *tokens, int *token_index)
     struct ast_node *function = create_ast_node_at(AST_FUNCTION, func_name, params, body, function_location);
     function->data_type = type_from_name(type_name);
     function->pointer_depth = pointer_depth;
+    function->struct_name = return_struct ? strdup(return_struct) : NULL;
     return function;
 }
 

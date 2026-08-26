@@ -242,6 +242,8 @@ Supported expression features:
   `struct Point p = {.z = 30, .x = 10};`
 - Compound literals: `sum((struct Point){3, 4})`, which build an unnamed object
   where they appear
+- Passing and returning a struct of sixteen bytes or fewer by value, in one
+  or two registers as System V classifies it
 - Address-of, dereference, and indexing expressions: `&x`, `*p`, and `a[i]`
 - Struct field access through a pointer: `p->field`
 - `++` and `--` on any assignable expression, not only named variables:
@@ -446,10 +448,11 @@ This removes the `build/` directory.
 
 ## Current Limitations
 
-- A struct larger than eight bytes cannot be passed by value, and no struct
-  can be returned by value. Both need System V's two-register and stack-copy
-  rules; oversized ones are refused rather than quietly miscompiled. Assigning
-  a whole struct, and passing a pointer to one, both work.
+- A struct larger than sixteen bytes cannot be passed or returned by value.
+  That is System V's MEMORY class, which needs a stack copy and a hidden
+  return pointer; oversized ones are refused rather than quietly miscompiled.
+  Assigning a whole struct, and passing a pointer to one, both work at any
+  size.
 - Function-pointer declarators are recognised only in the form
   `TYPE (*name)(params)`. The general recursive declarator grammar, which would
   also give `int (*a)[10]`, is not implemented.
