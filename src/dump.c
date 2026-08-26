@@ -38,7 +38,12 @@ static const char *token_kind_name(int kind)
         case T_IF: return "if";
         case T_ELSE: return "else";
         case T_WHILE: return "while";
+        case T_DO: return "do";
         case T_FOR: return "for";
+        case T_SWITCH: return "switch";
+        case T_CASE: return "case";
+        case T_DEFAULT: return "default";
+        case T_GOTO: return "goto";
         case T_BREAK: return "break";
         case T_CONTINUE: return "continue";
         case T_STRUCT: return "struct";
@@ -103,6 +108,7 @@ static const char *ast_kind_name(int kind)
         case AST_PROGRAM: return "program";
         case AST_FUNCTION_LIST: return "function_list";
         case AST_FUNCTION: return "function";
+        case AST_FUNCTION_DECL: return "function_decl";
         case AST_GLOBAL_DECL: return "global_decl";
         case AST_STRUCT_DEF: return "struct_def";
         case AST_FIELD_LIST: return "field_list";
@@ -119,7 +125,15 @@ static const char *ast_kind_name(int kind)
         case AST_IF: return "if";
         case AST_IF_BRANCHES: return "if_branches";
         case AST_WHILE: return "while";
+        case AST_DO_WHILE: return "do_while";
         case AST_FOR: return "for";
+        case AST_SWITCH: return "switch";
+        case AST_SWITCH_BODY: return "switch_body";
+        case AST_CASE: return "case";
+        case AST_DEFAULT: return "default";
+        case AST_GOTO: return "goto";
+        case AST_LABEL: return "label";
+        case AST_EMPTY: return "empty";
         case AST_FOR_PARTS: return "for_parts";
         case AST_BREAK: return "break";
         case AST_CONTINUE: return "continue";

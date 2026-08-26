@@ -680,6 +680,16 @@ static void warn_if_unreachable(struct sema_ctx *ctx, struct ast_node *statement
         return;
     }
 
+    /*
+     * A case label, a default label, or a goto target is reachable by jumping
+     * to it, so what precedes it says nothing about whether it runs. Only
+     * straight-line code after a jump is genuinely unreachable.
+     */
+    if (next->type == AST_CASE || next->type == AST_DEFAULT ||
+        next->type == AST_LABEL) {
+        return;
+    }
+
     diag_set_function(ctx->current_function);
     diag_at(DIAG_WARNING, next->location,
         "unreachable statement after '%s'", keyword);
@@ -715,6 +725,38 @@ static void analyze_statement(struct sema_ctx *ctx, struct ast_node *node)
             analyze_expression(ctx, node->left);
             analyze_statement(ctx, node->right->left);
             analyze_statement(ctx, node->right->right);
+            break;
+        case AST_EMPTY:
+            break;
+        case AST_LABEL:
+            analyze_statement(ctx, node->left);
+            break;
+        case AST_GOTO:
+            /* Labels are resolved by the code generator, which sees them all. */
+            break;
+        case AST_DO_WHILE:
+            /*
+             * The body runs before the condition is first tested, but both are
+             * inside the loop for the purposes of break and continue.
+             */
+            ctx->loop_depth++;
+            analyze_statement(ctx, node->right);
+            ctx->loop_depth--;
+            analyze_expression(ctx, node->left);
+            break;
+        case AST_SWITCH:
+            analyze_expression(ctx, node->left);
+            /*
+             * break inside a switch leaves the switch, so it counts as being
+             * inside a breakable construct even outside any loop.
+             */
+            ctx->loop_depth++;
+            analyze_statement(ctx, node->right);
+            ctx->loop_depth--;
+            break;
+        case AST_CASE:
+        case AST_DEFAULT:
+            analyze_statement(ctx, node->left);
             break;
         case AST_WHILE:
             analyze_expression(ctx, node->left);
@@ -1055,6 +1097,17 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
             argument_index = 0;
             for (argument = node->left; argument; argument = argument->right) {
                 check_expression_type(ctx, &argument->left);
+                /*
+                 * Passing a struct by value needs the System V classification
+                 * rules -- small ones travel in registers, larger ones on the
+                 * stack. That is not implemented, so it is refused rather than
+                 * quietly passing the wrong thing; a pointer to it works.
+                 */
+                if (argument->left && argument->left->ty &&
+                    argument->left->ty->kind == TY_STRUCT) {
+                    semantic_error_at(ctx, argument->left,
+                        "cannot pass a struct by value yet; pass a pointer to it");
+                }
                 if (global >= 0 && ctx->globals[global].is_function &&
                     argument_index < ctx->globals[global].parameter_count) {
                     if (semantic_effective_pointer_depth(argument->left) !=
@@ -1100,6 +1153,12 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
             node->data_type = node->left->data_type;
             node->pointer_depth = node->left->pointer_depth - 1;
             node->array_length = 0;
+            /*
+             * Carry the struct tag through, so *p and p->field reach the same
+             * fields that p.field would on a struct value.
+             */
+            node->struct_name = node->left->struct_name ?
+                strdup(node->left->struct_name) : NULL;
             return node->data_type;
         case AST_ARRAY_SUBSCRIPT:
             check_expression_type(ctx, &node->left);
@@ -1291,6 +1350,22 @@ static void check_statement_types(struct sema_ctx *ctx, struct ast_node *node)
             check_expression_type(ctx, &node->left);
             check_statement_types(ctx, node->right->left);
             check_statement_types(ctx, node->right->right);
+            break;
+        case AST_EMPTY:
+        case AST_GOTO:
+            break;
+        case AST_LABEL:
+        case AST_CASE:
+        case AST_DEFAULT:
+            check_statement_types(ctx, node->left);
+            break;
+        case AST_DO_WHILE:
+            check_expression_type(ctx, &node->left);
+            check_statement_types(ctx, node->right);
+            break;
+        case AST_SWITCH:
+            check_expression_type(ctx, &node->left);
+            check_statement_types(ctx, node->right);
             break;
         case AST_WHILE:
             check_expression_type(ctx, &node->left);

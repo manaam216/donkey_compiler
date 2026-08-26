@@ -238,6 +238,10 @@ Supported expression features:
 - Brace initializers for arrays, with omitted elements zero-filled:
   `int values[3] = {1, 2};`
 - Address-of, dereference, and indexing expressions: `&x`, `*p`, and `a[i]`
+- Struct field access through a pointer: `p->field`
+- `++` and `--` on any assignable expression, not only named variables:
+  `a[i]++`, `p->count++`
+- Whole-struct assignment: `b = a` copies every field
 - Array-to-pointer decay in expressions, plus scaled pointer arithmetic:
   `p + 1`, `p - 1`, `p++`, and `p--`
 - Pointer subtraction for compatible pointer types
@@ -268,8 +272,12 @@ Supported expression features:
 - Function calls with arguments: `helper(x, 4)`
 - Global variables: `int g;` and `int g = constant_expression;`
 - Conditionals: `if` and `if/else`
-- Loops: `while`, expression-clause `for`, and declaration-initializer `for`
+- `switch` with `case`, `default`, and fallthrough between cases
+- Loops: `while`, `do`/`while`, expression-clause `for`, and
+  declaration-initializer `for`
 - Loop control: `break` and `continue`
+- `goto` and labels
+- The empty statement, `;`, and a bare `return;`
 - C-like precedence for the supported expression operators
 - Shifts: `<<`, `>>`
 - Increment/decrement: `++x`, `x++`, `--x`, `x--`
@@ -435,6 +443,14 @@ This removes the `build/` directory.
 
 - Global initializers must be constant expressions
 - Arrays cannot be assigned as whole values
-- Struct support does not include nested structs or struct parameters yet
+- Struct support does not include nested structs. A struct can be assigned and
+  pointed at, but not passed to a function by value or returned from one --
+  both need the System V rules for splitting a struct across registers, and
+  passing one is refused rather than quietly miscompiled
+- Multi-dimensional arrays, function pointers, and `float`/`double` are not
+  supported yet
+- Compound assignment (`+=` and friends) still requires a named variable on the
+  left; `a[i] += 1` is refused. Plain `++`/`--` work on any assignable
+  expression
 - Assembly output is for learning and demonstration, not a complete production
   toolchain

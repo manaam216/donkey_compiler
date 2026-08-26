@@ -224,6 +224,8 @@ void lex_text(const char *text, size_t length, const char *source_path,
         } else if (c == '-') {
             if ((c = fgetc(infile)) == '-') {
                 add_token(tokens, token_count, T_MINUS_MINUS, "--");
+            } else if (c == '>') {
+                add_token(tokens, token_count, T_ARROW, "->");
             } else if (c == '=') {
                 add_token(tokens, token_count, T_MINUS_ASSIGN, "-=");
             } else {
@@ -400,6 +402,16 @@ void lex_text(const char *text, size_t length, const char *source_path,
                 add_token(tokens, token_count, T_ELSE, buffer);
             } else if (strcmp(buffer, "while") == 0) {
                 add_token(tokens, token_count, T_WHILE, buffer);
+            } else if (strcmp(buffer, "do") == 0) {
+                add_token(tokens, token_count, T_DO, buffer);
+            } else if (strcmp(buffer, "switch") == 0) {
+                add_token(tokens, token_count, T_SWITCH, buffer);
+            } else if (strcmp(buffer, "case") == 0) {
+                add_token(tokens, token_count, T_CASE, buffer);
+            } else if (strcmp(buffer, "default") == 0) {
+                add_token(tokens, token_count, T_DEFAULT, buffer);
+            } else if (strcmp(buffer, "goto") == 0) {
+                add_token(tokens, token_count, T_GOTO, buffer);
             } else if (strcmp(buffer, "for") == 0) {
                 add_token(tokens, token_count, T_FOR, buffer);
             } else if (strcmp(buffer, "break") == 0) {

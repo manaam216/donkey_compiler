@@ -55,6 +55,9 @@ examples/shadowing.c shadowing
 examples/many_args.c many_args
 tests/semantic/valid_forward_call.c valid_forward_call
 examples/declarations.c declarations
+examples/statements.c statements
+examples/struct_pointers.c struct_pointers
+examples/struct_copy.c struct_copy
 examples/libc_call.c libc_call
 tests/preprocess/features.c pp_features
 "
@@ -260,6 +263,7 @@ expect_error tests/semantic/invalid_dereference.c "cannot dereference non-pointe
 expect_error tests/semantic/invalid_pointer_addition.c "invalid operands to pointer arithmetic"
 expect_error tests/semantic/too_many_array_initializers.c "too many initializers for array 'values'"
 expect_error tests/semantic/invalid_pointer_subtraction.c "cannot subtract incompatible pointer types"
+expect_error tests/semantic/struct_by_value.c "cannot pass a struct by value yet"
 expect_error tests/limits/global_array_too_long.c "exceeds the supported length of 256"
 expect_error_count tests/semantic/multiple_errors.c 4
 expect_error_count tests/syntax/multiple_errors.c 2

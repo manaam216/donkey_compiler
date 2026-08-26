@@ -29,9 +29,28 @@ struct cg_string {
     int label;
 };
 
+/* A goto target: the source name paired with the emitted label number. */
+struct cg_label {
+    char *name;
+    int number;
+};
+
 struct cg_ctx {
     int label_count;
     int current_function_end_label;
+
+    /*
+     * Labels in the function being generated. They are collected before the
+     * body is emitted, because a goto may jump forward to a label that has not
+     * been reached yet.
+     */
+    struct cg_label *labels;
+    int label_name_count;
+    int label_name_capacity;
+
+    /* The break target of the switch being generated, if any. */
+    int switch_break_label;
+    int in_switch;
 
     int *loop_break_labels;
     int *loop_continue_labels;
@@ -70,6 +89,10 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
 static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
 static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
 static int count_args(struct ast_node *node);
+static void generate_lvalue_address(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
+static void generate_cast(const char *type, FILE *output);
+static const char *codegen_type_name(CType type);
+static void emit_step(struct Type *ty, int is_increment, FILE *output);
 
 static int find_global(const char *name)
 {
@@ -315,6 +338,155 @@ static void emit_compare(struct Type *left, struct Type *right, FILE *output)
 
     fprintf(output, size == 8 ? "    cmpq    %%rax, %%rdx\n"
                               : "    cmpl    %%eax, %%edx\n");
+}
+
+/*
+ * Labels are gathered before the function body is emitted: a goto may target a
+ * label further down, so the number has to exist before the jump is written.
+ */
+static int label_for_name(struct cg_ctx *ctx, const char *name)
+{
+    int i;
+
+    for (i = 0; i < ctx->label_name_count; i++) {
+        if (strcmp(ctx->labels[i].name, name) == 0) {
+            return ctx->labels[i].number;
+        }
+    }
+
+    cg_grow((void **)&ctx->labels, ctx->label_name_count,
+        &ctx->label_name_capacity, sizeof(*ctx->labels));
+    ctx->labels[ctx->label_name_count].name = strdup(name);
+    ctx->labels[ctx->label_name_count].number = ctx->label_count++;
+    return ctx->labels[ctx->label_name_count++].number;
+}
+
+static void collect_labels(struct cg_ctx *ctx, struct ast_node *node)
+{
+    if (!node) {
+        return;
+    }
+    if (node->type == AST_LABEL && node->value) {
+        label_for_name(ctx, node->value);
+    }
+    collect_labels(ctx, node->left);
+    collect_labels(ctx, node->right);
+}
+
+static void free_labels(struct cg_ctx *ctx)
+{
+    int i;
+
+    for (i = 0; i < ctx->label_name_count; i++) {
+        free(ctx->labels[i].name);
+    }
+    free(ctx->labels);
+    ctx->labels = NULL;
+    ctx->label_name_count = 0;
+    ctx->label_name_capacity = 0;
+}
+
+/*
+ * Emit the comparisons for a switch.
+ *
+ * Each case is tested against the control value in turn and jumps to its own
+ * label. That is a chain of compares rather than a jump table -- correct for
+ * any set of case values, including sparse ones, and the shape an optimiser
+ * would later turn into a table where the values are dense.
+ */
+static void emit_switch_tests(struct cg_ctx *ctx, struct ast_node *node,
+    int *default_label, FILE *output)
+{
+    if (!node) {
+        return;
+    }
+
+    if (node->type == AST_CASE) {
+        node->string_label = ctx->label_count++;    /* reused as this case's label */
+        fprintf(output, "    cmpl    $%s, %%eax\n", node->value ? node->value : "0");
+        fprintf(output, "    je      .L%d\n", node->string_label);
+        emit_switch_tests(ctx, node->left, default_label, output);
+        return;
+    }
+    if (node->type == AST_DEFAULT) {
+        node->string_label = ctx->label_count++;
+        *default_label = node->string_label;
+        emit_switch_tests(ctx, node->left, default_label, output);
+        return;
+    }
+
+    /*
+     * Only the statements that can contain a case label of this switch are
+     * followed. A nested switch owns its own cases, so it is not entered.
+     */
+    if (node->type == AST_SWITCH) {
+        return;
+    }
+    emit_switch_tests(ctx, node->left, default_label, output);
+    emit_switch_tests(ctx, node->right, default_label, output);
+}
+
+/*
+ * ++ and -- on something that is not a plain variable: an array element or a
+ * struct field. The address is computed once and kept, so the operand is not
+ * evaluated twice -- which would be wrong the moment the subscript had a side
+ * effect. The result is the new value for a prefix operator and the old one
+ * for a postfix operator.
+ */
+static void generate_incdec_lvalue(struct cg_ctx *ctx, struct ast_node *node,
+    int is_increment, int is_prefix, FILE *output)
+{
+    struct Type *ty = node->ty;
+
+    generate_lvalue_address(ctx, node->left, output);
+    fprintf(output, "    pushq   %%rax\n");          /* the address */
+    emit_load_indirect(ty, output);
+
+    if (!is_prefix) {
+        fprintf(output, "    pushq   %%rax\n");      /* the value before */
+    }
+
+    emit_step(ty, is_increment, output);
+    generate_cast(codegen_type_name(node->data_type), output);
+    fprintf(output, "    movq    %%rax, %%rdx\n");   /* the value to store */
+
+    if (!is_prefix) {
+        fprintf(output, "    popq    %%rcx\n");      /* the value before */
+    }
+    fprintf(output, "    popq    %%rax\n");          /* the address */
+    emit_store_indirect(ty, output);
+
+    fprintf(output, is_prefix ? "    movq    %%rdx, %%rax\n"
+                              : "    movq    %%rcx, %%rax\n");
+}
+
+/*
+ * Copy a struct from one place to another.
+ *
+ * A struct is wider than a register, so assigning one is a block copy rather
+ * than a move: the destination address is in %rax and the source in %rdx, and
+ * the bytes are moved in the largest chunks that fit. Sizes here are small and
+ * known at compile time, so the copy is unrolled rather than looped.
+ */
+static void emit_struct_copy(int size, FILE *output)
+{
+    int offset = 0;
+
+    while (size - offset >= 8) {
+        fprintf(output, "    movq    %d(%%rdx), %%rcx\n", offset);
+        fprintf(output, "    movq    %%rcx, %d(%%rax)\n", offset);
+        offset += 8;
+    }
+    while (size - offset >= 4) {
+        fprintf(output, "    movl    %d(%%rdx), %%ecx\n", offset);
+        fprintf(output, "    movl    %%ecx, %d(%%rax)\n", offset);
+        offset += 4;
+    }
+    while (size - offset >= 1) {
+        fprintf(output, "    movb    %d(%%rdx), %%cl\n", offset);
+        fprintf(output, "    movb    %%cl, %d(%%rax)\n", offset);
+        offset += 1;
+    }
 }
 
 static void generate_epilogue(FILE *output)
@@ -729,6 +901,7 @@ static void generate_function(struct cg_ctx *ctx, struct ast_node *node, FILE *o
 
     frame_size = (frame_size + 15) / 16 * 16;
     ctx->current_function_end_label = ctx->label_count++;
+    collect_labels(ctx, node->right);
 
     fprintf(output, ".globl %s\n", node->value);
     fprintf(output, "%s:\n", node->value);
@@ -748,6 +921,7 @@ static void generate_function(struct cg_ctx *ctx, struct ast_node *node, FILE *o
     fprintf(output, "    movl    $0, %%eax\n");
     fprintf(output, ".L%d:\n", ctx->current_function_end_label);
     generate_epilogue(output);
+    free_labels(ctx);
 }
 
 static void generate_program(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
@@ -856,6 +1030,69 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
             fprintf(output, ".L%d:\n", end_label);
             break;
         }
+        case AST_EMPTY:
+            break;
+        case AST_LABEL:
+            fprintf(output, ".L%d:\n", label_for_name(ctx, node->value));
+            generate_statement(ctx, node->left, output);
+            break;
+        case AST_GOTO:
+            fprintf(output, "    jmp     .L%d\n", label_for_name(ctx, node->value));
+            break;
+        case AST_DO_WHILE: {
+            int body_label = ctx->label_count++;
+            int condition_label = ctx->label_count++;
+            int end_label = ctx->label_count++;
+
+            /*
+             * The body comes first and the test last, so the body always runs
+             * once. continue goes to the test, not to the top.
+             */
+            fprintf(output, ".L%d:\n", body_label);
+            push_loop(ctx, end_label, condition_label);
+            generate_statement(ctx, node->right, output);
+            pop_loop(ctx);
+            fprintf(output, ".L%d:\n", condition_label);
+            generate_exp(ctx, node->left, output);
+            fprintf(output, "    cmpl    $0, %%eax\n");
+            fprintf(output, "    jne     .L%d\n", body_label);
+            fprintf(output, ".L%d:\n", end_label);
+            break;
+        }
+        case AST_SWITCH: {
+            int end_label = ctx->label_count++;
+            int default_label = -1;
+            int saved_break = ctx->switch_break_label;
+            int saved_in_switch = ctx->in_switch;
+
+            /*
+             * Evaluate the control value once, then compare it against each
+             * case. The tests are emitted before the body, so control reaches
+             * the matching label without running the statements above it.
+             */
+            generate_exp(ctx, node->left, output);
+            emit_switch_tests(ctx, node->right, &default_label, output);
+            fprintf(output, "    jmp     .L%d\n",
+                default_label >= 0 ? default_label : end_label);
+
+            ctx->switch_break_label = end_label;
+            ctx->in_switch = 1;
+            push_loop(ctx, end_label, ctx->loop_depth > 0
+                ? ctx->loop_continue_labels[ctx->loop_depth - 1] : end_label);
+            generate_statement(ctx, node->right, output);
+            pop_loop(ctx);
+            ctx->switch_break_label = saved_break;
+            ctx->in_switch = saved_in_switch;
+
+            fprintf(output, ".L%d:\n", end_label);
+            break;
+        }
+        case AST_CASE:
+        case AST_DEFAULT:
+            /* The label number was assigned while the tests were emitted. */
+            fprintf(output, ".L%d:\n", node->string_label);
+            generate_statement(ctx, node->left, output);
+            break;
         case AST_WHILE: {
             int start_label = ctx->label_count++;
             int end_label = ctx->label_count++;
@@ -1178,6 +1415,18 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             break;
         }
         case AST_ASSIGN:
+            /*
+             * A struct does not fit in a register, so it is copied rather than
+             * moved. Both sides are addresses in that case, not values.
+             */
+            if (node->left->ty && node->left->ty->kind == TY_STRUCT) {
+                generate_lvalue_address(ctx, node->right, output);
+                fprintf(output, "    pushq   %%rax\n");
+                generate_lvalue_address(ctx, node->left, output);
+                fprintf(output, "    popq    %%rdx\n");
+                emit_struct_copy(node->left->ty->size, output);
+                break;
+            }
             generate_exp(ctx, node->right, output);
             fprintf(output, "    pushq   %%rax\n");
             generate_lvalue_address(ctx, node->left, output);
@@ -1202,18 +1451,30 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             emit_load_indirect(node->ty, output);
             break;
         case AST_PRE_INCREMENT:
+            if (node->left->type != AST_IDENTIFIER) {
+                generate_incdec_lvalue(ctx, node, 1, 1, output);
+                break;
+            }
             generate_identifier_load(node->left, output);
             emit_step(node->ty, 1, output);
             generate_cast(codegen_type_name(node->data_type), output);
             generate_identifier_store(node->left, output);
             break;
         case AST_PRE_DECREMENT:
+            if (node->left->type != AST_IDENTIFIER) {
+                generate_incdec_lvalue(ctx, node, 0, 1, output);
+                break;
+            }
             generate_identifier_load(node->left, output);
             emit_step(node->ty, 0, output);
             generate_cast(codegen_type_name(node->data_type), output);
             generate_identifier_store(node->left, output);
             break;
         case AST_POST_INCREMENT:
+            if (node->left->type != AST_IDENTIFIER) {
+                generate_incdec_lvalue(ctx, node, 1, 0, output);
+                break;
+            }
             generate_identifier_load(node->left, output);
             fprintf(output, "    pushq   %%rax\n");
             emit_step(node->ty, 1, output);
@@ -1222,6 +1483,10 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             fprintf(output, "    popq    %%rax\n");
             break;
         case AST_POST_DECREMENT:
+            if (node->left->type != AST_IDENTIFIER) {
+                generate_incdec_lvalue(ctx, node, 0, 0, output);
+                break;
+            }
             generate_identifier_load(node->left, output);
             fprintf(output, "    pushq   %%rax\n");
             emit_step(node->ty, 0, output);

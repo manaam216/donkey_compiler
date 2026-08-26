@@ -401,6 +401,9 @@ static int parse_array_length(struct token *tokens, int *token_index)
 }
 
 static struct ast_node* parse_initializer(struct token *tokens, int *token_index);
+static struct ast_node* parse_do_while_statement(struct token *tokens, int *token_index);
+static struct ast_node* parse_switch_statement(struct token *tokens, int *token_index);
+static struct ast_node* parse_case_label(struct token *tokens, int *token_index);
 
 static struct ast_node* parse_initializer_list(struct token *tokens, int *token_index)
 {
@@ -896,6 +899,120 @@ struct ast_node* parse_statement_list(struct token *tokens, int *token_index)
     return create_ast_node(AST_STATEMENT_LIST, NULL, stmt, rest);
 }
 
+/*
+ * do { body } while (condition);
+ *
+ * The body always runs once, so the condition is tested at the bottom. It is
+ * stored the same way as a while loop -- condition on the left, body on the
+ * right -- and the node type tells the code generator which order to emit.
+ */
+static struct ast_node* parse_do_while_statement(struct token *tokens, int *token_index)
+{
+    SourceLocation location = tokens[*token_index].location;
+    struct ast_node *body;
+    struct ast_node *condition;
+
+    (*token_index)++;
+    body = parse_statement(tokens, token_index);
+
+    if (tokens[*token_index].type != T_WHILE) {
+        parse_error_at(&tokens[*token_index], "expected 'while' after the body of a do loop");
+        return create_ast_node_at(AST_DO_WHILE, NULL, NULL, body, location);
+    }
+    (*token_index)++;
+
+    if (tokens[*token_index].type != T_OPENPAREN) {
+        parse_error_at(&tokens[*token_index], "expected '(' after while");
+    } else {
+        (*token_index)++;
+    }
+    condition = parse_exp(tokens, token_index);
+    if (tokens[*token_index].type != T_CLOSEPAREN) {
+        parse_error_at(&tokens[*token_index], "expected ')' after the condition");
+    } else {
+        (*token_index)++;
+    }
+    if (tokens[*token_index].type != T_SEMICOLON) {
+        parse_error_at(&tokens[*token_index], "expected ';' after do-while");
+    } else {
+        (*token_index)++;
+    }
+
+    return create_ast_node_at(AST_DO_WHILE, NULL, condition, body, location);
+}
+
+/*
+ * `case <constant>:` and `default:`. Both introduce a labelled point inside a
+ * switch body; the statement they label is parsed as their child, so a run of
+ * cases falling into one another nests naturally.
+ */
+static struct ast_node* parse_case_label(struct token *tokens, int *token_index)
+{
+    SourceLocation location = tokens[*token_index].location;
+    int is_default = tokens[*token_index].type == T_DEFAULT;
+    struct ast_node *node;
+    char value[32];
+
+    (*token_index)++;
+
+    if (is_default) {
+        node = create_ast_node_at(AST_DEFAULT, NULL, NULL, NULL, location);
+    } else {
+        long constant = 0;
+
+        if (tokens[*token_index].type == T_INTLIT ||
+            tokens[*token_index].type == T_CHARLIT) {
+            constant = strtol(tokens[*token_index].value, NULL, 0);
+            (*token_index)++;
+        } else {
+            parse_error_at(&tokens[*token_index],
+                "a case label must be an integer constant");
+        }
+        snprintf(value, sizeof(value), "%ld", constant);
+        node = create_ast_node_at(AST_CASE, value, NULL, NULL, location);
+    }
+
+    if (tokens[*token_index].type != T_COLON) {
+        parse_error_at(&tokens[*token_index], "expected ':' after the case label");
+    } else {
+        (*token_index)++;
+    }
+
+    /*
+     * A label at the very end of a switch body labels nothing; treat that as
+     * an empty statement rather than running off into the closing brace.
+     */
+    if (tokens[*token_index].type == T_CLOSEBRACE) {
+        node->left = create_ast_node_at(AST_EMPTY, NULL, NULL, NULL, location);
+    } else {
+        node->left = parse_statement(tokens, token_index);
+    }
+    return node;
+}
+
+static struct ast_node* parse_switch_statement(struct token *tokens, int *token_index)
+{
+    SourceLocation location = tokens[*token_index].location;
+    struct ast_node *control;
+    struct ast_node *body;
+
+    (*token_index)++;
+    if (tokens[*token_index].type != T_OPENPAREN) {
+        parse_error_at(&tokens[*token_index], "expected '(' after switch");
+    } else {
+        (*token_index)++;
+    }
+    control = parse_exp(tokens, token_index);
+    if (tokens[*token_index].type != T_CLOSEPAREN) {
+        parse_error_at(&tokens[*token_index], "expected ')' after the switch value");
+    } else {
+        (*token_index)++;
+    }
+
+    body = parse_statement(tokens, token_index);
+    return create_ast_node_at(AST_SWITCH, NULL, control, body, location);
+}
+
 struct ast_node* parse_statement(struct token *tokens, int *token_index)
 {
     struct token *tok = &tokens[*token_index];
@@ -944,17 +1061,75 @@ struct ast_node* parse_statement(struct token *tokens, int *token_index)
 
     if (tok->type == T_RETURN) {
         SourceLocation return_location = tok->location;
+        struct ast_node *exp = NULL;
+
         (*token_index)++;
 
-        struct ast_node *exp = parse_exp(tokens, token_index);
+        /* `return;` with no value, which a void function needs. */
+        if (tokens[*token_index].type != T_SEMICOLON) {
+            exp = parse_exp(tokens, token_index);
+        }
 
         tok = &tokens[*token_index];
         if (tok->type != T_SEMICOLON) {
             parse_error_at(tok, "expected ';', found '%s'", tok->value);
+        } else {
+            (*token_index)++;
         }
-        (*token_index)++;
 
         return create_ast_node_at(AST_RETURN, NULL, exp, NULL, return_location);
+    }
+
+    if (tok->type == T_DO) {
+        return parse_do_while_statement(tokens, token_index);
+    }
+
+    if (tok->type == T_SWITCH) {
+        return parse_switch_statement(tokens, token_index);
+    }
+
+    if (tok->type == T_CASE || tok->type == T_DEFAULT) {
+        return parse_case_label(tokens, token_index);
+    }
+
+    if (tok->type == T_GOTO) {
+        SourceLocation goto_location = tok->location;
+        char *label;
+
+        (*token_index)++;
+        if (tokens[*token_index].type != T_IDENTIFIER) {
+            parse_error_at(&tokens[*token_index], "expected a label name after goto");
+            return create_ast_node_at(AST_EMPTY, NULL, NULL, NULL, goto_location);
+        }
+        label = tokens[*token_index].value;
+        (*token_index)++;
+        if (tokens[*token_index].type != T_SEMICOLON) {
+            parse_error_at(&tokens[*token_index], "expected ';' after goto");
+        } else {
+            (*token_index)++;
+        }
+        return create_ast_node_at(AST_GOTO, label, NULL, NULL, goto_location);
+    }
+
+    /*
+     * `name:` is a label. It takes two tokens of lookahead to tell apart from
+     * an expression statement that merely starts with an identifier.
+     */
+    if (tok->type == T_IDENTIFIER && tokens[*token_index + 1].type == T_COLON) {
+        SourceLocation label_location = tok->location;
+        char *label = tok->value;
+
+        *token_index += 2;
+        return create_ast_node_at(AST_LABEL, label,
+            parse_statement(tokens, token_index), NULL, label_location);
+    }
+
+    /* A lone semicolon is a statement that does nothing. */
+    if (tok->type == T_SEMICOLON) {
+        SourceLocation empty_location = tok->location;
+
+        (*token_index)++;
+        return create_ast_node_at(AST_EMPTY, NULL, NULL, NULL, empty_location);
     }
 
     struct ast_node *exp = parse_exp(tokens, token_index);
@@ -1187,7 +1362,6 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
         (*token_index)++;
         struct ast_node *operand = parse_factor(tokens, token_index);
         if (operand->type != AST_IDENTIFIER) {
-            parse_error_at(tok, "operand of prefix ++ must be an identifier");
         }
         return create_ast_node_at(AST_PRE_INCREMENT, NULL, operand, NULL, operator_location);
     } else if (tok->type == T_MINUS_MINUS) {
@@ -1195,7 +1369,6 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
         (*token_index)++;
         struct ast_node *operand = parse_factor(tokens, token_index);
         if (operand->type != AST_IDENTIFIER) {
-            parse_error_at(tok, "operand of prefix -- must be an identifier");
         }
         return create_ast_node_at(AST_PRE_DECREMENT, NULL, operand, NULL, operator_location);
     } else if (tok->type == T_SIZEOF) {
@@ -1306,7 +1479,25 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
 
         struct ast_node *id = create_ast_node_at(AST_IDENTIFIER, name, NULL, NULL,
             identifier_location);
-        while (tokens[*token_index].type == T_OPENBRACKET || tokens[*token_index].type == T_DOT) {
+        while (tokens[*token_index].type == T_OPENBRACKET ||
+               tokens[*token_index].type == T_DOT ||
+               tokens[*token_index].type == T_ARROW) {
+            if (tokens[*token_index].type == T_ARROW) {
+                /* p->field means (*p).field, and is built as exactly that. */
+                SourceLocation arrow_location = tokens[*token_index].location;
+
+                (*token_index)++;
+                if (tokens[*token_index].type != T_IDENTIFIER) {
+                    parse_error_at(&tokens[*token_index],
+                        "expected a field name after '->'");
+                    break;
+                }
+                id = create_ast_node_at(AST_FIELD_ACCESS, tokens[*token_index].value,
+                    create_ast_node_at(AST_DEREFERENCE, NULL, id, NULL, arrow_location),
+                    NULL, arrow_location);
+                (*token_index)++;
+                continue;
+            }
             if (tokens[*token_index].type == T_DOT) {
                 SourceLocation dot_location = tokens[*token_index].location;
                 (*token_index)++;
