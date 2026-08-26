@@ -1,43 +1,75 @@
 /*
- * Statement forms added in Phase 9: switch with fallthrough and a default,
- * do-while, goto with a label, and the empty statement.
+ * Statement forms added in Phase 9: switch, do/while, goto and labels, the
+ * empty statement, and a bare return from a void function.
  */
+void nothing(void)
+{
+    return;             /* a void function returns no value */
+}
+
 int classify(int n)
 {
-    int result = 0;
+    int result;
 
     switch (n) {
-        case 0:
-            result = 100;
+        case 1:
+            result = 10;
             break;
-        case 1:                 /* falls through to the next case */
         case 2:
-            result = 200;
-            break;
-        case 9:
-            result = 900;
+        case 3:
+            result = 20;    /* two labels reaching one body */
             break;
         default:
-            result = -1;
+            result = 30;
+            break;
     }
     return result;
 }
 
-int main()
+int count_down(int from)
 {
     int total = 0;
+
+    do {
+        total = total + from;
+        from = from - 1;
+    } while (from > 0);
+
+    return total;
+}
+
+int find_first_negative(int values[4])
+{
     int i = 0;
 
-    /* The body runs before the condition is first tested. */
-    do {
-        total = total + classify(i);
+    while (i < 4) {
+        if (values[i] < 0) {
+            goto found;
+        }
         i = i + 1;
-    } while (i < 4);
+    }
+    return -1;
 
-    ;                           /* a statement that does nothing */
+found:
+    return i;
+}
 
-    if (total > 0) goto done;
-    total = -999;               /* unreachable while total is positive */
-done:
-    return total + classify(9);
+int main()
+{
+    int values[4];
+    int total = 0;
+
+    ;                   /* an empty statement is allowed */
+    nothing();
+
+    values[0] = 5;
+    values[1] = 6;
+    values[2] = 0 - 7;
+    values[3] = 8;
+
+    total = classify(1) + classify(3) + classify(9);   /* 10 + 20 + 30 */
+    total = total + count_down(4);                     /* 4+3+2+1 = 10 */
+    total = total + find_first_negative(values);       /* 2 */
+
+    return total;
 }

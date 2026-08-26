@@ -3,6 +3,9 @@
 
 #include <stdio.h>
 
+/* Nesting depth for array declarators, as in int a[2][3][4]. */
+#define DONKEY_MAX_ARRAY_DIMS 4
+
 typedef enum {
     T_OPENBRACE,
     T_CLOSEBRACE,
@@ -197,6 +200,14 @@ struct ast_node {
     CType data_type;
     int pointer_depth;
     int array_length;
+
+    /*
+     * All dimensions of an array declarator, outermost first, so `int a[2][3]`
+     * can be resolved to an array of arrays. array_length above is the first
+     * of them, which is all a one-dimensional array ever needed.
+     */
+    int array_dims[DONKEY_MAX_ARRAY_DIMS];
+    int array_dim_count;
     char *struct_name;
 
     /*

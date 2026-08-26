@@ -400,6 +400,72 @@ static int parse_array_length(struct token *tokens, int *token_index)
     return length;
 }
 
+/*
+ * Parse every `[N]` of a declarator, outermost first. Returns how many there
+ * were; dims receives the sizes. A declarator with no brackets yields zero.
+ */
+static int parse_array_dims(struct token *tokens, int *token_index, int *dims)
+{
+    int count = 0;
+
+    while (tokens[*token_index].type == T_OPENBRACKET) {
+        int length = parse_array_length(tokens, token_index);
+
+        if (count < DONKEY_MAX_ARRAY_DIMS) {
+            dims[count] = length;
+        } else {
+            parse_error_at(&tokens[*token_index],
+                "arrays may nest at most %d deep", DONKEY_MAX_ARRAY_DIMS);
+        }
+        count++;
+    }
+    return count < DONKEY_MAX_ARRAY_DIMS ? count : DONKEY_MAX_ARRAY_DIMS;
+}
+
+/*
+ * Copy an expression subtree. Compound assignment is rewritten as
+ * `target = target op value`, which needs the target twice; the two copies
+ * must be independent nodes because semantic analysis annotates each one.
+ */
+static struct ast_node *clone_expression(const struct ast_node *node)
+{
+    struct ast_node *copy;
+
+    if (!node) {
+        return NULL;
+    }
+
+    copy = create_ast_node_at(node->type, node->value,
+        clone_expression(node->left), clone_expression(node->right),
+        node->location);
+    copy->data_type = node->data_type;
+    copy->pointer_depth = node->pointer_depth;
+    copy->array_length = node->array_length;
+    memcpy(copy->array_dims, node->array_dims, sizeof(copy->array_dims));
+    copy->array_dim_count = node->array_dim_count;
+    copy->struct_name = node->struct_name ? strdup(node->struct_name) : NULL;
+    copy->string_label = node->string_label;
+    return copy;
+}
+
+/*
+ * Whether an expression can be evaluated twice safely, which the rewrite above
+ * requires. A call could do anything, so a target containing one is refused
+ * rather than silently run twice.
+ */
+static int is_repeatable(const struct ast_node *node)
+{
+    if (!node) {
+        return 1;
+    }
+    if (node->type == AST_CALL || node->type == AST_ASSIGN ||
+        node->type == AST_PRE_INCREMENT || node->type == AST_POST_INCREMENT ||
+        node->type == AST_PRE_DECREMENT || node->type == AST_POST_DECREMENT) {
+        return 0;
+    }
+    return is_repeatable(node->left) && is_repeatable(node->right);
+}
+
 static struct ast_node* parse_initializer(struct token *tokens, int *token_index);
 static struct ast_node* parse_do_while_statement(struct token *tokens, int *token_index);
 static struct ast_node* parse_switch_statement(struct token *tokens, int *token_index);
@@ -737,7 +803,9 @@ struct ast_node* parse_global_declaration(struct token *tokens, int *token_index
     char *name = tok->value;
     SourceLocation declaration_location = tok->location;
     (*token_index)++;
-    int array_length = parse_array_length(tokens, token_index);
+    int dims[DONKEY_MAX_ARRAY_DIMS];
+    int dim_count = parse_array_dims(tokens, token_index, dims);
+    int array_length = dim_count > 0 ? dims[0] : 0;
 
     struct ast_node *initializer = NULL;
     if (tokens[*token_index].type == T_ASSIGN) {
@@ -756,6 +824,8 @@ struct ast_node* parse_global_declaration(struct token *tokens, int *token_index
     declaration->data_type = type_from_name(type_name);
     declaration->pointer_depth = pointer_depth;
     declaration->array_length = array_length;
+    memcpy(declaration->array_dims, dims, sizeof(dims));
+    declaration->array_dim_count = dim_count;
     declaration->struct_name = struct_name ? strdup(struct_name) : NULL;
     return declaration;
 }
@@ -1176,6 +1246,8 @@ struct ast_node* parse_declaration(struct token *tokens, int *token_index)
         char *name;
         SourceLocation declaration_location;
         int array_length;
+        int dims[DONKEY_MAX_ARRAY_DIMS];
+        int dim_count;
         struct ast_node *initializer = NULL;
         struct ast_node *declaration;
 
@@ -1188,7 +1260,9 @@ struct ast_node* parse_declaration(struct token *tokens, int *token_index)
         name = tok->value;
         declaration_location = tok->location;
         (*token_index)++;
-        array_length = parse_array_length(tokens, token_index);
+        array_length = parse_array_dims(tokens, token_index, dims);
+        dim_count = array_length;
+        array_length = dim_count > 0 ? dims[0] : 0;
 
         if (tokens[*token_index].type == T_ASSIGN) {
             (*token_index)++;
@@ -1200,6 +1274,8 @@ struct ast_node* parse_declaration(struct token *tokens, int *token_index)
         declaration->data_type = type_from_name(type_name);
         declaration->pointer_depth = pointer_depth;
         declaration->array_length = array_length;
+        memcpy(declaration->array_dims, dims, sizeof(dims));
+        declaration->array_dim_count = dim_count;
         declaration->struct_name = struct_name ? strdup(struct_name) : NULL;
 
         /* A single declarator stays a bare AST_DECL, as it always was. */
@@ -1376,7 +1452,26 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
         (*token_index)++;
         if (tokens[*token_index].type == T_OPENPAREN) {
             int type_index = *token_index + 1;
-            const char *type_name = parse_type_name(tokens, &type_index);
+            const char *type_name;
+
+            /*
+             * `sizeof(struct X)` names a type, not an expression. The struct's
+             * size is not known until its definition has been collected, so
+             * the tag is recorded and semantic analysis resolves it.
+             */
+            if (tokens[type_index].type == T_STRUCT &&
+                tokens[type_index + 1].type == T_IDENTIFIER &&
+                tokens[type_index + 2].type == T_CLOSEPAREN) {
+                struct ast_node *size = create_ast_node_at(AST_SIZEOF, NULL,
+                    NULL, NULL, sizeof_location);
+
+                size->struct_name = strdup(tokens[type_index + 1].value);
+                size->data_type = TYPE_UINT;
+                *token_index = type_index + 3;
+                return size;
+            }
+
+            type_name = parse_type_name(tokens, &type_index);
             if (type_name && tokens[type_index].type == T_CLOSEPAREN) {
                 *token_index = type_index + 1;
                 struct ast_node *size = create_ast_node_at(AST_SIZEOF, (char *)type_name, NULL, NULL,
@@ -1642,9 +1737,9 @@ struct ast_node* parse_assignment(struct token *tokens, int *token_index)
         if (op == T_ASSIGN) {
             return create_ast_node_at(AST_ASSIGN, NULL, left, right, operator_location);
         }
-        if (left->type != AST_IDENTIFIER) {
+        if (!is_repeatable(left)) {
             parse_error_at(&tokens[*token_index],
-                "compound assignment target must be an identifier");
+                "compound assignment target must not have side effects");
         }
 
         ASTNodeType binop = AST_ADD;
@@ -1663,7 +1758,7 @@ struct ast_node* parse_assignment(struct token *tokens, int *token_index)
             NULL,
             left,
             create_ast_node_at(binop, NULL,
-                create_ast_node_at(AST_IDENTIFIER, left->value, NULL, NULL, left->location),
+                clone_expression(left),
                 right,
                 operator_location)
         );

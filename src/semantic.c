@@ -11,6 +11,8 @@
 struct global_symbol {
     const char *name;
     struct Symbol *sym;
+    int array_dims[DONKEY_MAX_ARRAY_DIMS];
+    int array_dim_count;
     int is_function;
     int is_defined;             /* a body was seen, not just a prototype */
     int is_variadic;            /* the parameter list ended with ... */
@@ -28,6 +30,8 @@ struct local_symbol {
     CType type;
     int pointer_depth;
     int array_length;
+    int array_dims[DONKEY_MAX_ARRAY_DIMS];
+    int array_dim_count;
     const char *struct_name;
     int depth;
     struct Symbol *sym;
@@ -212,7 +216,15 @@ static struct Type *resolve_type(struct sema_ctx *ctx, struct ast_node *node)
     for (i = 0; i < node->pointer_depth; i++) {
         type = ty_pointer_to(type);
     }
-    if (node->array_length > 0) {
+    /*
+     * Build the array type from the inside out: `int a[2][3]` is an array of 2
+     * arrays of 3 ints, so the last dimension is applied first.
+     */
+    if (node->array_dim_count > 0) {
+        for (i = node->array_dim_count - 1; i >= 0; i--) {
+            type = ty_array_of(type, node->array_dims[i]);
+        }
+    } else if (node->array_length > 0) {
         type = ty_array_of(type, node->array_length);
     }
     return type;
@@ -404,6 +416,9 @@ static void add_global(struct sema_ctx *ctx, struct ast_node *node)
     ctx->globals[ctx->global_count].type = node->data_type;
     ctx->globals[ctx->global_count].pointer_depth = node->pointer_depth;
     ctx->globals[ctx->global_count].array_length = node->array_length;
+    memcpy(ctx->globals[ctx->global_count].array_dims, node->array_dims,
+        sizeof(node->array_dims));
+    ctx->globals[ctx->global_count].array_dim_count = node->array_dim_count;
     ctx->globals[ctx->global_count].struct_name = node->struct_name;
     ctx->globals[ctx->global_count].parameter_count = 0;
     if (is_function) {
@@ -481,6 +496,9 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
     ctx->locals[ctx->local_count].type = type;
     ctx->locals[ctx->local_count].pointer_depth = node->pointer_depth;
     ctx->locals[ctx->local_count].array_length = node->array_length;
+    memcpy(ctx->locals[ctx->local_count].array_dims, node->array_dims,
+        sizeof(node->array_dims));
+    ctx->locals[ctx->local_count].array_dim_count = node->array_dim_count;
     ctx->locals[ctx->local_count].struct_name = node->struct_name;
     ctx->locals[ctx->local_count].depth = ctx->scope_depth;
     ctx->local_count++;
@@ -1048,6 +1066,19 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
             /* Type the operand so its size is known; it is never evaluated. */
             if (node->left) {
                 check_expression_type(ctx, &node->left);
+            } else if (node->struct_name) {
+                /*
+                 * sizeof(struct X): resolve the tag now that the definition
+                 * has been collected, and hang the layout on the node.
+                 */
+                int index = find_struct(ctx, node->struct_name);
+
+                if (index >= 0) {
+                    node->ty = ctx->structs[index].ty;
+                } else {
+                    semantic_error_at(ctx, node, "unknown struct type '%s'",
+                        node->struct_name);
+                }
             }
             return node->data_type = TYPE_UINT;
         case AST_INITIALIZER_LIST:
@@ -1061,6 +1092,9 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
                 node->data_type = ctx->locals[local].type;
                 node->pointer_depth = ctx->locals[local].pointer_depth;
                 node->array_length = ctx->locals[local].array_length;
+                memcpy(node->array_dims, ctx->locals[local].array_dims,
+                    sizeof(node->array_dims));
+                node->array_dim_count = ctx->locals[local].array_dim_count;
                 node->struct_name = ctx->locals[local].struct_name ? strdup(ctx->locals[local].struct_name) : NULL;
                 return node->data_type;
             }
@@ -1068,6 +1102,9 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
                 node->sym = ctx->globals[global].sym;
                 node->pointer_depth = ctx->globals[global].pointer_depth;
                 node->array_length = ctx->globals[global].array_length;
+                memcpy(node->array_dims, ctx->globals[global].array_dims,
+                    sizeof(node->array_dims));
+                node->array_dim_count = ctx->globals[global].array_dim_count;
                 node->struct_name = ctx->globals[global].struct_name ? strdup(ctx->globals[global].struct_name) : NULL;
                 return node->data_type = ctx->globals[global].type;
             }
@@ -1174,7 +1211,23 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
             node->data_type = node->left->data_type;
             node->pointer_depth = node->left->array_length > 0 ?
                 node->left->pointer_depth : node->left->pointer_depth - 1;
-            node->array_length = 0;
+            /*
+             * Indexing peels off the outermost dimension: an element of
+             * `int[2][3]` is an `int[3]`, which is itself still an array.
+             */
+            if (node->left->array_dim_count > 1) {
+                int d;
+
+                node->array_dim_count = node->left->array_dim_count - 1;
+                for (d = 0; d < node->array_dim_count; d++) {
+                    node->array_dims[d] = node->left->array_dims[d + 1];
+                }
+                node->array_length = node->array_dims[0];
+                node->pointer_depth = node->left->pointer_depth;
+            } else {
+                node->array_dim_count = 0;
+                node->array_length = 0;
+            }
             /*
              * Carry the struct tag through the subscript, so an element of a
              * struct array is still a struct and its fields stay accessible.

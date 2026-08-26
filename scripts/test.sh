@@ -56,6 +56,7 @@ examples/many_args.c many_args
 tests/semantic/valid_forward_call.c valid_forward_call
 examples/declarations.c declarations
 examples/statements.c statements
+examples/pointers_structs.c pointers_structs
 examples/struct_pointers.c struct_pointers
 examples/struct_copy.c struct_copy
 examples/libc_call.c libc_call

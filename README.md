@@ -441,16 +441,18 @@ This removes the `build/` directory.
 
 ## Current Limitations
 
-- Global initializers must be constant expressions
-- Arrays cannot be assigned as whole values
-- Struct support does not include nested structs. A struct can be assigned and
-  pointed at, but not passed to a function by value or returned from one --
-  both need the System V rules for splitting a struct across registers, and
-  passing one is refused rather than quietly miscompiled
-- Multi-dimensional arrays, function pointers, and `float`/`double` are not
-  supported yet
-- Compound assignment (`+=` and friends) still requires a named variable on the
-  left; `a[i] += 1` is refused. Plain `++`/`--` work on any assignable
-  expression
+- Structs cannot be passed to a function by value or returned from one. Both
+  need the System V rules for splitting a struct across registers; passing one
+  is refused rather than quietly miscompiled. Assigning a whole struct, and
+  passing a pointer to one, both work.
+- No function pointers: `int (*f)(int, int)` does not parse yet. That needs
+  recursive declarators, which also cover `int (*a)[10]`.
+- No `float` or `double`. The lexer does not read a decimal point, and there is
+  no floating-point code generation or SSE calling convention.
+- No compound literals or designated initialisers.
+- No `union`, and no nested struct definitions.
+- Global initializers must be constant expressions.
+- Arrays cannot be assigned as whole values.
+- Arrays nest at most four deep.
 - Assembly output is for learning and demonstration, not a complete production
-  toolchain
+  toolchain.

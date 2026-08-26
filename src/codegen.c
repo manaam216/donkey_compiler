@@ -614,6 +614,14 @@ static int sizeof_node(struct ast_node *node)
     if (node->left && node->left->ty) {
         return node->left->ty->size;
     }
+    /*
+     * sizeof(struct X): the layout semantic analysis attached to the node.
+     * Only when a tag was named -- every sizeof node carries a ty of its own
+     * (unsigned, the type of the result), which is not what is being measured.
+     */
+    if (!node->left && node->struct_name && node->ty) {
+        return node->ty->size;
+    }
     if (node->value) {
         return ty_from_name(node->value)->size;
     }
@@ -1011,7 +1019,14 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
             generate_exp(ctx, node->left, output);
             break;
         case AST_RETURN:
-            generate_exp(ctx, node->left, output);
+            /*
+             * `return;` carries no expression. The value in %eax is then
+             * whatever the caller must not look at, which is exactly what a
+             * void return means.
+             */
+            if (node->left) {
+                generate_exp(ctx, node->left, output);
+            }
             fprintf(output, "    jmp     .L%d\n", ctx->current_function_end_label);
             break;
         case AST_IF: {
