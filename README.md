@@ -9,19 +9,25 @@ integer-returning functions.
 ```text
 .
 |-- include/          Public compiler headers
+|   |-- cli.h
 |   |-- decl.h
 |   |-- defs.h
 |   |-- diag.h
+|   |-- dump.h
+|   |-- preprocess.h
 |   |-- symbol.h
 |   `-- type.h
 |-- src/              Compiler implementation
 |   |-- main.c        CLI entry point
+|   |-- preprocess.c  Directives, macro expansion, #include
 |   |-- lexer.c       Tokenizer
 |   |-- parser.c      Recursive descent parser and AST allocation
 |   |-- semantic.c    Name, scope, type, and function-call validation
 |   |-- type.c        Type representation, sizes, and struct layout
 |   |-- symbol.c      Storage identities and stack frame layout
 |   |-- diag.c        Diagnostics, error recovery, and warnings
+|   |-- cli.c         Command-line option parsing
+|   |-- dump.c        Token and syntax-tree debug output
 |   `-- codegen.c     Assembly generator
 |-- examples/         Source examples and reference assembly
 |   |-- sample.c
@@ -40,12 +46,15 @@ integer-returning functions.
 |-- tests/            Test inputs and expectations
 |   |-- harness.c     Prints a compiled program's result (see Test)
 |   |-- harness_freestanding.c  Same, without libc (see Test)
-|   |-- unit/         Unit tests for compiler internals
+|   |-- harness_libc.c  Same, for programs that call the C library
+|   |-- start.s        Entry point for tests linked without crt1.o
+|   |-- unit/         Unit tests, run in process (type, lexer, cli)
 |   |-- golden/       Reference assembly for every example
 |   |-- expected/     Reference program output for every example
 |   |-- syntax/       Inputs that must fail to parse
 |   |-- semantic/     Inputs that must fail semantic analysis
-|   `-- limits/       Inputs that must hit a compiler capacity limit
+|   |-- limits/       Inputs that must hit a compiler capacity limit
+|   `-- preprocess/   Preprocessor inputs, checked against the system cpp
 |-- build/            Generated binaries and assembly output
 `-- Makefile
 ```
@@ -71,7 +80,7 @@ On Windows with MinGW GCC and no `make`, run:
 
 ```powershell
 New-Item -ItemType Directory -Force build
-gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\lexer.c src\parser.c src\semantic.c src\type.c src\symbol.c src\codegen.c
+gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\preprocess.c src\lexer.c src\parser.c src\semantic.c src\type.c src\symbol.c src\diag.c src\dump.c src\cli.c src\codegen.c
 ```
 
 ## Test
@@ -96,9 +105,10 @@ diagnostic.
 Results are compared as **printed values rather than process exit codes**.
 Exit codes are truncated to 8 unsigned bits, so they silently accept wrong
 answers: a function returning `100000` exits `160`, and one returning `-42`
-exits `214`. `examples/wide_values.c` covers that range explicitly. Donkey
-itself cannot call `printf` — it has no preprocessor, and semantic analysis
-rejects undeclared functions — hence the separate harness.
+exits `214`. `examples/wide_values.c` covers that range explicitly. Donkey can call `printf` now that prototypes exist, but most examples do not,
+so the harness reports their result instead. Programs that do call the C
+library keep their own output and are linked against it -- see
+`examples/libc_call.c`.
 
 After an intentional codegen or diagnostic change, regenerate the golden files
 and review the diff before committing:
@@ -133,43 +143,60 @@ sanitizers, so that job is Linux-only.
 
 ## Run
 
-Compile the main example:
-
 ```sh
-./build/donkey examples/sample.c build/sample.asm
+./build/donkey examples/sample.c -o build/sample.asm
 ```
 
 On Windows:
 
 ```powershell
-.\build\donkey.exe examples\sample.c build\sample.asm
+.\build\donkey.exe examples\sample.c -o build\sample.asm
 ```
 
-Compile the broader operator example:
+Run `./build/donkey --help` for the full list. The options that exist are:
 
-```sh
-./build/donkey examples/operators.c build/operators.asm
+| Option | Effect |
+| --- | --- |
+| `-o`, `--output <file>` | Where to write the assembly (default `output.asm`) |
+| `-S` | Emit assembly; the only code-generating mode |
+| `-E` | Preprocess only, and print the result |
+| `-I <dir>` | Add a directory to the include search path |
+| `-D <name>[=value]` | Define a macro; without a value it becomes `1` |
+| `-Wall` | Enable all warnings, which is already the default |
+| `-Werror` | Treat warnings as errors |
+| `-w` | Suppress warnings |
+| `--dump-tokens` | Print the token stream and stop |
+| `--dump-ast` | Print the annotated syntax tree and stop |
+| `-v`, `--verbose` | Report each stage as it runs |
+| `-h`, `--help` | Usage |
+| `--version` | Version |
+
+Options belonging to stages that do not exist yet -- `-O`, `-g`, `-c`,
+`--dump-ir` -- are refused with an explanation rather than accepted
+and ignored, so a build never quietly does something other than what was asked:
+
+```text
+$ ./build/donkey -O2 examples/sample.c
+-O2: not supported yet: there is no optimiser yet
 ```
 
-Compile the assignment and short-circuit examples:
+The older form, `donkey input.c output.asm`, still works.
 
-```sh
-./build/donkey examples/assignment.c build/assignment.asm
-./build/donkey examples/short_circuit.c build/short_circuit.asm
-./build/donkey examples/locals.c build/locals.asm
-./build/donkey examples/multiple_functions.c build/multiple_functions.asm
-./build/donkey examples/control_flow.c build/control_flow.asm
-./build/donkey examples/casts.c build/casts.asm
-./build/donkey examples/comments.c build/comments.asm
-./build/donkey examples/globals.c build/globals.asm
+### Inspecting the compiler's own state
+
+`--dump-ast` runs after semantic analysis, so each node shows the type and the
+storage location resolved for it:
+
+```text
+function 'main' : int [function frame=8]   <1:5>
+  block   <2:1>
+    statement_list   <3:9>
+      decl 'x' : int [local -4(%rbp)]   <3:9>
+        intlit '3' : int   <3:13>
 ```
 
-If you omit the output path, Donkey writes to `output.asm` in the current
-directory:
-
-```sh
-./build/donkey examples/unary.c
-```
+`--dump-tokens` prints the token stream with the line and column each token
+carries, which is what every diagnostic points at.
 
 You can also build and run the sample target in one step:
 
@@ -228,6 +255,16 @@ Supported expression features:
 - Multiple statements inside a function body
 - Multiple integer-returning functions per input file
 - Function parameters: `int helper(int x, int y)`
+- Function prototypes, so a function can be called before it is defined:
+  `int helper(int x);`
+- `void` as a return type, and `f(void)` for a function taking nothing
+- Variadic declarations: `int printf(const char *format, ...);`, which makes
+  the C library callable
+- Storage classes and qualifiers -- `extern`, `static`, `const`, `volatile` --
+  accepted wherever a declaration allows them
+- Several declarators in one declaration: `int a = 1, b, *p;`
+- `enum`, with explicit values: `enum Status { OK = 10, FAILED };`
+- `typedef`, including pointer aliases: `typedef int *IntPtr;`
 - Function calls with arguments: `helper(x, 4)`
 - Global variables: `int g;` and `int g = constant_expression;`
 - Conditionals: `if` and `if/else`
@@ -253,6 +290,52 @@ wrong number of arguments, non-constant global initializers, and `break` or
 `continue` statements outside loops. Function signatures are collected before
 function bodies are checked, so calls to functions defined later in the file
 are valid.
+
+### Preprocessing
+
+Donkey runs a preprocessor over the source before parsing it. It works on
+tokens rather than raw text, because text substitution cannot get `#` and `##`
+right and has no reliable way to tell a macro name from the same letters inside
+a string literal.
+
+Supported: `#include` in both `"file"` and `<file>` forms, `#define` for object
+and function-like macros, `#undef`, `#if` / `#ifdef` / `#ifndef` / `#elif` /
+`#else` / `#endif` with full constant-expression evaluation and `defined`,
+`#pragma once`, `#error`, `#warning`, and the `#` and `##` operators.
+`__STDC__` and `__DONKEY__` are predefined. A macro is not re-expanded inside
+its own expansion, so a self-referential definition terminates.
+
+`-E` prints the result:
+
+```sh
+./build/donkey -E examples/sample.c
+```
+
+The test suite compares that output against the system `cpp`, token for token,
+for `tests/preprocess/features.c`.
+
+Diagnostics name the file a token actually came from, so an error inside an
+included header points at the header rather than at the file that included it.
+
+**`#include <stdio.h>` still does not work**, though it is closer. `typedef`,
+`extern`, prototypes, `void`, and varargs all exist now, so a function can be
+declared by hand and called:
+
+```c
+int printf(const char *format, ...);
+
+int main()
+{
+    printf("hello from donkey
+");
+    return 0;
+}
+```
+
+That compiles, links against the system C library, and runs -- see
+`examples/libc_call.c`. A real `stdio.h` still needs more than the declaration
+forms: compiler-specific attributes, nested struct definitions, and
+`unsigned long long` among them.
 
 ### Diagnostics
 

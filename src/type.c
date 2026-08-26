@@ -7,6 +7,7 @@
  * Basic types are singletons: there is exactly one `int` type object, so
  * comparisons can be done by pointer where convenient.
  */
+static struct Type basic_void   = { TY_VOID,  1, 1, 0, NULL, 0, NULL, NULL, 1 };
 static struct Type basic_char   = { TY_CHAR,  1, 1, 0, NULL, 0, NULL, NULL, 1 };
 static struct Type basic_uchar  = { TY_CHAR,  1, 1, 1, NULL, 0, NULL, NULL, 1 };
 static struct Type basic_short  = { TY_SHORT, 2, 2, 0, NULL, 0, NULL, NULL, 1 };
@@ -16,6 +17,7 @@ static struct Type basic_uint   = { TY_INT,   4, 4, 1, NULL, 0, NULL, NULL, 1 };
 static struct Type basic_long   = { TY_LONG,  8, 8, 0, NULL, 0, NULL, NULL, 1 };
 static struct Type basic_ulong  = { TY_LONG,  8, 8, 1, NULL, 0, NULL, NULL, 1 };
 
+struct Type *ty_void   = &basic_void;
 struct Type *ty_char   = &basic_char;
 struct Type *ty_uchar  = &basic_uchar;
 struct Type *ty_short  = &basic_short;
@@ -206,6 +208,7 @@ const char *ty_name(struct Type *type)
     }
 
     switch (type->kind) {
+        case TY_VOID:   return "void";
         case TY_CHAR:   return type->is_unsigned ? "uchar" : "char";
         case TY_SHORT:  return type->is_unsigned ? "ushort" : "short";
         case TY_INT:    return type->is_unsigned ? "uint" : "int";
@@ -251,6 +254,7 @@ void ty_format(struct Type *type, char *buffer, size_t size)
 struct Type *ty_from_name(const char *name)
 {
     if (!name) return ty_int;
+    if (strcmp(name, "void") == 0)   return ty_void;
     if (strcmp(name, "char") == 0)   return ty_char;
     if (strcmp(name, "uchar") == 0)  return ty_uchar;
     if (strcmp(name, "short") == 0)  return ty_short;

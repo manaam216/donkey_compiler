@@ -61,11 +61,253 @@ static void synchronize(struct token *tokens, int *token_index)
     }
 }
 
+/*
+ * Storage-class specifiers and type qualifiers. They are recognised so that
+ * declarations written the way real headers write them will parse; none of
+ * them changes the generated code yet, so they are skipped once seen.
+ */
+static int is_declaration_prefix(TokenType type)
+{
+    return type == T_EXTERN || type == T_STATIC ||
+        type == T_CONST || type == T_VOLATILE;
+}
+
+static void skip_declaration_prefixes(struct token *tokens, int *token_index)
+{
+    while (is_declaration_prefix(tokens[*token_index].type)) {
+        (*token_index)++;
+    }
+}
+
+/*
+ * typedef names.
+ *
+ * A typedef makes the parser's job context-dependent: `foo * bar;` declares a
+ * pointer if foo is a type and multiplies if it is a variable. The only way to
+ * tell is to remember which names have been typedef'd, which is what this
+ * table is for. Definitions are visible from their point of declaration
+ * onward, which is why it is consulted during parsing rather than later.
+ */
+struct typedef_name {
+    char *name;
+    char *type_name;            /* the base type it stands for */
+    int pointer_depth;
+};
+
+static struct typedef_name *typedef_names;
+static int typedef_count;
+static int typedef_capacity;
+
+/*
+ * Pointer depth carried by a typedef the parser just resolved, as in
+ * `typedef int *IntPtr;`. parse_type_name reports only a base type name, so
+ * the stars the alias stands for are held here and added by the
+ * parse_pointer_stars call that always follows.
+ */
+static int pending_typedef_pointers;
+
+static void add_typedef(const char *name, const char *type_name, int pointer_depth)
+{
+    if (typedef_count >= typedef_capacity) {
+        typedef_capacity = typedef_capacity ? typedef_capacity * 2 : 32;
+        typedef_names = realloc(typedef_names,
+            (size_t)typedef_capacity * sizeof(*typedef_names));
+        if (!typedef_names) {
+            perror("Error allocating typedef");
+            exit(EXIT_FAILURE);
+        }
+    }
+    typedef_names[typedef_count].name = strdup(name);
+    typedef_names[typedef_count].type_name = strdup(type_name);
+    typedef_names[typedef_count].pointer_depth = pointer_depth;
+    typedef_count++;
+}
+
+static const struct typedef_name *find_typedef(const char *name)
+{
+    int i;
+
+    if (!name) {
+        return NULL;
+    }
+    for (i = typedef_count - 1; i >= 0; i--) {
+        if (strcmp(typedef_names[i].name, name) == 0) {
+            return &typedef_names[i];
+        }
+    }
+    return NULL;
+}
+
+void parser_reset_typedefs(void)
+{
+    int i;
+
+    for (i = 0; i < typedef_count; i++) {
+        free(typedef_names[i].name);
+        free(typedef_names[i].type_name);
+    }
+    free(typedef_names);
+    typedef_names = NULL;
+    typedef_count = 0;
+    typedef_capacity = 0;
+}
+
+/*
+ * enum { A, B = 5, C } -- the constants become ordinary integer values, so the
+ * parser records them and every later use is just an int literal. The tag, if
+ * present, is accepted and ignored: an enum is an int here.
+ *
+ * The table is file-scope because enum constants, unlike variables, are known
+ * at parse time and are visible from the point of definition onward.
+ */
+struct enum_constant {
+    char *name;
+    long value;
+};
+
+static struct enum_constant *enum_constants;
+static int enum_constant_count;
+static int enum_constant_capacity;
+
+static void add_enum_constant(const char *name, long value)
+{
+    if (enum_constant_count >= enum_constant_capacity) {
+        enum_constant_capacity = enum_constant_capacity ? enum_constant_capacity * 2 : 32;
+        enum_constants = realloc(enum_constants,
+            (size_t)enum_constant_capacity * sizeof(*enum_constants));
+        if (!enum_constants) {
+            perror("Error allocating enum constant");
+            exit(EXIT_FAILURE);
+        }
+    }
+    enum_constants[enum_constant_count].name = strdup(name);
+    enum_constants[enum_constant_count].value = value;
+    enum_constant_count++;
+}
+
+static const struct enum_constant *find_enum_constant(const char *name)
+{
+    int i;
+
+    if (!name) {
+        return NULL;
+    }
+    for (i = enum_constant_count - 1; i >= 0; i--) {
+        if (strcmp(enum_constants[i].name, name) == 0) {
+            return &enum_constants[i];
+        }
+    }
+    return NULL;
+}
+
+void parser_reset_enums(void)
+{
+    int i;
+
+    for (i = 0; i < enum_constant_count; i++) {
+        free(enum_constants[i].name);
+    }
+    free(enum_constants);
+    enum_constants = NULL;
+    enum_constant_count = 0;
+    enum_constant_capacity = 0;
+}
+
+/* Parse an enum specifier, recording its constants. Returns 1 if one was there. */
+static int parse_enum_specifier(struct token *tokens, int *token_index)
+{
+    long next_value = 0;
+
+    if (tokens[*token_index].type != T_ENUM) {
+        return 0;
+    }
+    (*token_index)++;
+
+    if (tokens[*token_index].type == T_IDENTIFIER) {
+        (*token_index)++;           /* the tag; an enum is an int here */
+    }
+
+    if (tokens[*token_index].type != T_OPENBRACE) {
+        return 1;                   /* a reference to an existing enum type */
+    }
+    (*token_index)++;
+
+    while (tokens[*token_index].type != T_CLOSEBRACE &&
+           tokens[*token_index].type != T_EOF) {
+        const char *name;
+
+        if (tokens[*token_index].type != T_IDENTIFIER) {
+            parse_error_at(&tokens[*token_index],
+                "expected an enumerator name, found '%s'",
+                tokens[*token_index].value);
+            break;
+        }
+        name = tokens[*token_index].value;
+        (*token_index)++;
+
+        if (tokens[*token_index].type == T_ASSIGN) {
+            (*token_index)++;
+            if (tokens[*token_index].type == T_INTLIT ||
+                tokens[*token_index].type == T_CHARLIT) {
+                next_value = strtol(tokens[*token_index].value, NULL, 0);
+                (*token_index)++;
+            } else if (tokens[*token_index].type == T_IDENTIFIER) {
+                const struct enum_constant *previous =
+                    find_enum_constant(tokens[*token_index].value);
+
+                if (previous) {
+                    next_value = previous->value;
+                } else {
+                    parse_error_at(&tokens[*token_index],
+                        "enumerator value must be a constant");
+                }
+                (*token_index)++;
+            } else {
+                parse_error_at(&tokens[*token_index],
+                    "enumerator value must be a constant");
+            }
+        }
+
+        add_enum_constant(name, next_value);
+        next_value++;
+
+        if (tokens[*token_index].type == T_COMMA) {
+            (*token_index)++;
+        }
+    }
+
+    if (tokens[*token_index].type == T_CLOSEBRACE) {
+        (*token_index)++;
+    } else {
+        parse_error_at(&tokens[*token_index], "expected '}' to close the enum");
+    }
+    return 1;
+}
+
 static const char* parse_type_name(struct token *tokens, int *token_index)
 {
     int is_unsigned = 0;
     int has_sign = 0;
     TokenType base_type;
+
+    pending_typedef_pointers = 0;
+
+    /* An enum is an int; parsing the specifier records its constants. */
+    if (tokens[*token_index].type == T_ENUM) {
+        parse_enum_specifier(tokens, token_index);
+        return "int";
+    }
+
+    /* A name introduced by typedef stands in for its underlying type. */
+    if (tokens[*token_index].type == T_IDENTIFIER) {
+        const struct typedef_name *alias = find_typedef(tokens[*token_index].value);
+
+        if (alias) {
+            (*token_index)++;
+            pending_typedef_pointers = alias->pointer_depth;
+            return alias->type_name;
+        }
+    }
 
     if (tokens[*token_index].type == T_SIGNED || tokens[*token_index].type == T_UNSIGNED) {
         is_unsigned = tokens[*token_index].type == T_UNSIGNED;
@@ -74,6 +316,10 @@ static const char* parse_type_name(struct token *tokens, int *token_index)
     }
 
     base_type = tokens[*token_index].type;
+    if (base_type == T_VOID && !has_sign) {
+        (*token_index)++;
+        return "void";
+    }
     if (base_type == T_CHAR || base_type == T_SHORT || base_type == T_INT || base_type == T_LONG) {
         (*token_index)++;
     } else if (has_sign) {
@@ -101,6 +347,8 @@ static const char* parse_type_name(struct token *tokens, int *token_index)
 
 static CType type_from_name(const char *name)
 {
+    if (!name) return TYPE_INT;
+    if (strcmp(name, "void") == 0) return TYPE_VOID;
     if (strcmp(name, "char") == 0) return TYPE_CHAR;
     if (strcmp(name, "uchar") == 0) return TYPE_UCHAR;
     if (strcmp(name, "short") == 0) return TYPE_SHORT;
@@ -113,8 +361,10 @@ static CType type_from_name(const char *name)
 
 static int parse_pointer_stars(struct token *tokens, int *token_index)
 {
-    int pointer_depth = 0;
+    /* Stars the alias already stood for, plus any written here. */
+    int pointer_depth = pending_typedef_pointers;
 
+    pending_typedef_pointers = 0;
     while (tokens[*token_index].type == T_STAR) {
         pointer_depth++;
         (*token_index)++;
@@ -189,11 +439,17 @@ static struct ast_node* parse_initializer(struct token *tokens, int *token_index
     return create_ast_node_at(AST_INITIALIZER_LIST, NULL, list, NULL, location);
 }
 
+static int is_typedef_name(struct token *token)
+{
+    return token->type == T_IDENTIFIER && find_typedef(token->value) != NULL;
+}
+
 static int is_type_start(TokenType type)
 {
     return type == T_CHAR || type == T_SHORT || type == T_INT ||
         type == T_LONG || type == T_SIGNED || type == T_UNSIGNED ||
-        type == T_STRUCT;
+        type == T_STRUCT || type == T_UNION || type == T_ENUM ||
+        type == T_VOID || is_declaration_prefix(type);
 }
 
 static const char *parse_struct_name(struct token *tokens, int *token_index)
@@ -217,6 +473,8 @@ static const char *parse_struct_name(struct token *tokens, int *token_index)
 struct ast_node* parse_program(struct token *tokens, int *token_index, const char *source_path)
 {
     parser_source_path = source_path;
+    parser_reset_typedefs();
+    parser_reset_enums();
     return create_ast_node_at(AST_PROGRAM, NULL, parse_function_list(tokens, token_index), NULL,
         tokens[*token_index].location);
 }
@@ -252,7 +510,63 @@ struct ast_node* parse_function_list(struct token *tokens, int *token_index)
 
 struct ast_node* parse_external_declaration(struct token *tokens, int *token_index)
 {
-    int name_index = *token_index;
+    int name_index;
+
+    skip_declaration_prefixes(tokens, token_index);
+
+    /*
+     * `typedef <type> <name>;` records an alias and declares no object, so
+     * there is nothing to hand on to the later passes.
+     */
+    if (tokens[*token_index].type == T_TYPEDEF) {
+        const char *type_name;
+        int pointer_depth;
+
+        (*token_index)++;
+        if (tokens[*token_index].type == T_STRUCT) {
+            parse_struct_name(tokens, token_index);
+            type_name = "int";      /* struct aliases keep the tag's layout */
+        } else {
+            type_name = parse_type_name(tokens, token_index);
+        }
+        if (!type_name) {
+            parse_error_at(&tokens[*token_index], "expected a type after typedef");
+            return NULL;
+        }
+        pointer_depth = parse_pointer_stars(tokens, token_index);
+
+        if (tokens[*token_index].type != T_IDENTIFIER) {
+            parse_error_at(&tokens[*token_index],
+                "expected a name for the typedef, found '%s'",
+                tokens[*token_index].value);
+            return NULL;
+        }
+        add_typedef(tokens[*token_index].value, type_name, pointer_depth);
+        (*token_index)++;
+
+        if (tokens[*token_index].type != T_SEMICOLON) {
+            parse_error_at(&tokens[*token_index], "expected ';' after typedef");
+        } else {
+            (*token_index)++;
+        }
+        return NULL;
+    }
+
+    /*
+     * A standalone enum definition declares no object: parsing it records the
+     * constants, and there is nothing to hand on to the later passes.
+     */
+    if (tokens[*token_index].type == T_ENUM) {
+        int lookahead = *token_index;
+
+        parse_enum_specifier(tokens, &lookahead);
+        if (tokens[lookahead].type == T_SEMICOLON) {
+            *token_index = lookahead + 1;
+            return NULL;
+        }
+    }
+
+    name_index = *token_index;
 
     if (tokens[*token_index].type == T_STRUCT &&
         tokens[*token_index + 1].type == T_IDENTIFIER &&
@@ -272,6 +586,7 @@ struct ast_node* parse_external_declaration(struct token *tokens, int *token_ind
     if (!parse_type_name(tokens, &name_index)) {
         parse_error_at(&tokens[*token_index], "expected top-level declaration, found '%s'",
             tokens[*token_index].value);
+        return NULL;
     }
     parse_pointer_stars(tokens, &name_index);
 
@@ -376,6 +691,21 @@ struct ast_node* parse_function(struct token *tokens, int *token_index)
         (*token_index)++;
     }
 
+    if (tokens[*token_index].type == T_SEMICOLON) {
+        /*
+         * A prototype: the signature without a body. It makes the function
+         * callable before, or without, a definition -- which is what a header
+         * is for.
+         */
+        struct ast_node *prototype = create_ast_node_at(AST_FUNCTION_DECL, func_name,
+            params, NULL, function_location);
+
+        (*token_index)++;
+        prototype->data_type = type_from_name(type_name);
+        prototype->pointer_depth = pointer_depth;
+        return prototype;
+    }
+
     struct ast_node *body = parse_block(tokens, token_index);
 
     struct ast_node *function = create_ast_node_at(AST_FUNCTION, func_name, params, body, function_location);
@@ -429,13 +759,32 @@ struct ast_node* parse_global_declaration(struct token *tokens, int *token_index
 
 struct ast_node* parse_param_list(struct token *tokens, int *token_index)
 {
+    const char *struct_name = NULL;
+    const char *type_name;
+    int pointer_depth;
+    struct token *tok;
+    struct ast_node *param;
+    struct ast_node *rest = NULL;
+
     if (tokens[*token_index].type == T_CLOSEPAREN) {
         return NULL;
     }
 
-    const char *struct_name = NULL;
-    const char *type_name;
-    int pointer_depth;
+    /*
+     * `...` ends the list and marks the function variadic. It is recorded as a
+     * parameter node of its own so the shape of the list stays uniform.
+     */
+    if (tokens[*token_index].type == T_ELLIPSIS) {
+        struct ast_node *ellipsis = create_ast_node_at(AST_IDENTIFIER, "...",
+            NULL, NULL, tokens[*token_index].location);
+
+        ellipsis->data_type = TYPE_INVALID;
+        (*token_index)++;
+        return create_ast_node(AST_PARAM_LIST, NULL, ellipsis, NULL);
+    }
+
+    skip_declaration_prefixes(tokens, token_index);
+
     if (tokens[*token_index].type == T_STRUCT) {
         struct_name = parse_struct_name(tokens, token_index);
         type_name = "int";
@@ -445,25 +794,43 @@ struct ast_node* parse_param_list(struct token *tokens, int *token_index)
     if (!type_name) {
         parse_error_at(&tokens[*token_index], "expected parameter type, found '%s'",
             tokens[*token_index].value);
+        return NULL;
     }
 
+    skip_declaration_prefixes(tokens, token_index);
     pointer_depth = parse_pointer_stars(tokens, token_index);
-    struct token *tok = &tokens[*token_index];
-    if (tok->type != T_IDENTIFIER) {
-        parse_error_at(tok, "expected parameter name, found '%s'", tok->value);
+    skip_declaration_prefixes(tokens, token_index);
+
+    /*
+     * `void` alone means the function takes nothing, as in `int f(void)`. It is
+     * not a parameter, so the list is empty.
+     */
+    if (strcmp(type_name, "void") == 0 && pointer_depth == 0 &&
+        tokens[*token_index].type == T_CLOSEPAREN) {
+        return NULL;
     }
 
-    struct ast_node *param = create_ast_node_at(AST_IDENTIFIER, tok->value, NULL, NULL, tok->location);
+    tok = &tokens[*token_index];
+    if (tok->type == T_IDENTIFIER) {
+        param = create_ast_node_at(AST_IDENTIFIER, tok->value, NULL, NULL, tok->location);
+        (*token_index)++;
+    } else {
+        /*
+         * A prototype may name its types and not its parameters. The
+         * declaration is still complete, so an unnamed one is accepted.
+         */
+        param = create_ast_node_at(AST_IDENTIFIER, NULL, NULL, NULL, tok->location);
+    }
+
     param->data_type = type_from_name(type_name);
     param->pointer_depth = pointer_depth;
-    (*token_index)++;
+
     if (tokens[*token_index].type == T_OPENBRACKET) {
         parse_array_length(tokens, token_index);
         param->pointer_depth++;
     }
     param->struct_name = struct_name ? strdup(struct_name) : NULL;
 
-    struct ast_node *rest = NULL;
     if (tokens[*token_index].type == T_COMMA) {
         (*token_index)++;
         rest = parse_param_list(tokens, token_index);
@@ -537,7 +904,7 @@ struct ast_node* parse_statement(struct token *tokens, int *token_index)
         return parse_block(tokens, token_index);
     }
 
-    if (is_type_start(tok->type)) {
+    if (is_type_start(tok->type) || is_typedef_name(tok)) {
         return parse_declaration(tokens, token_index);
     }
 
@@ -601,47 +968,88 @@ struct ast_node* parse_statement(struct token *tokens, int *token_index)
     return create_ast_node_at(AST_EXPR_STMT, NULL, exp, NULL, exp->location);
 }
 
+/*
+ * One declaration may introduce several names: `int a, b = 2;`. The base type
+ * is parsed once and each declarator after it produces its own AST_DECL, with
+ * the results chained into a statement list so every later pass -- which
+ * already walks statement lists -- sees them without changes.
+ */
 struct ast_node* parse_declaration(struct token *tokens, int *token_index)
 {
     const char *struct_name = NULL;
     const char *type_name;
+    struct ast_node *first = NULL;
+    struct ast_node **tail = &first;
+
+    skip_declaration_prefixes(tokens, token_index);
+
     if (tokens[*token_index].type == T_STRUCT) {
         struct_name = parse_struct_name(tokens, token_index);
         type_name = "int";
     } else {
         type_name = parse_type_name(tokens, token_index);
     }
-    int pointer_depth = parse_pointer_stars(tokens, token_index);
-
-    struct token *tok = &tokens[*token_index];
-    if (tok->type != T_IDENTIFIER) {
-        parse_error_at(tok, "expected identifier in declaration, found '%s'", tok->value);
+    if (!type_name) {
+        parse_error_at(&tokens[*token_index], "expected a type, found '%s'",
+            tokens[*token_index].value);
+        return NULL;
     }
 
-    char *name = tok->value;
-    SourceLocation declaration_location = tok->location;
-    (*token_index)++;
-    int array_length = parse_array_length(tokens, token_index);
+    for (;;) {
+        int pointer_depth = parse_pointer_stars(tokens, token_index);
+        struct token *tok = &tokens[*token_index];
+        char *name;
+        SourceLocation declaration_location;
+        int array_length;
+        struct ast_node *initializer = NULL;
+        struct ast_node *declaration;
 
-    struct ast_node *initializer = NULL;
-    if (tokens[*token_index].type == T_ASSIGN) {
+        if (tok->type != T_IDENTIFIER) {
+            parse_error_at(tok, "expected identifier in declaration, found '%s'",
+                tok->value);
+            return first;
+        }
+
+        name = tok->value;
+        declaration_location = tok->location;
         (*token_index)++;
-        initializer = parse_initializer(tokens, token_index);
+        array_length = parse_array_length(tokens, token_index);
+
+        if (tokens[*token_index].type == T_ASSIGN) {
+            (*token_index)++;
+            initializer = parse_initializer(tokens, token_index);
+        }
+
+        declaration = create_ast_node_at(AST_DECL, name, initializer, NULL,
+            declaration_location);
+        declaration->data_type = type_from_name(type_name);
+        declaration->pointer_depth = pointer_depth;
+        declaration->array_length = array_length;
+        declaration->struct_name = struct_name ? strdup(struct_name) : NULL;
+
+        /* A single declarator stays a bare AST_DECL, as it always was. */
+        if (first == NULL) {
+            first = declaration;
+            tail = &first;
+        } else {
+            *tail = create_ast_node(AST_STATEMENT_LIST, NULL, *tail, declaration);
+            tail = &(*tail)->right;
+        }
+
+        if (tokens[*token_index].type != T_COMMA) {
+            break;
+        }
+        (*token_index)++;
     }
 
-    tok = &tokens[*token_index];
-    if (tok->type != T_SEMICOLON) {
-        parse_error_at(tok, "expected ';', found '%s'", tok->value);
+    if (tokens[*token_index].type != T_SEMICOLON) {
+        parse_error_at(&tokens[*token_index], "expected ';', found '%s'",
+            tokens[*token_index].value);
+    } else {
+        (*token_index)++;
     }
-    (*token_index)++;
 
-    struct ast_node *declaration = create_ast_node_at(AST_DECL, name, initializer, NULL,
-        declaration_location);
-    declaration->data_type = type_from_name(type_name);
-    declaration->pointer_depth = pointer_depth;
-    declaration->array_length = array_length;
-    declaration->struct_name = struct_name ? strdup(struct_name) : NULL;
-    return declaration;
+    return first;
 }
 
 struct ast_node* parse_if_statement(struct token *tokens, int *token_index)
@@ -746,7 +1154,8 @@ struct ast_node* parse_for_init(struct token *tokens, int *token_index)
         return NULL;
     }
 
-    if (is_type_start(tokens[*token_index].type)) {
+    if (is_type_start(tokens[*token_index].type) ||
+        is_typedef_name(&tokens[*token_index])) {
         return parse_declaration(tokens, token_index);
     }
 
@@ -854,6 +1263,22 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
         str_node->pointer_depth = 1;
         (*token_index)++;
         return str_node;
+    }
+
+    /*
+     * An enum constant is a compile-time integer, so it becomes a literal here
+     * and nothing downstream needs to know enums exist.
+     */
+    if (tok->type == T_IDENTIFIER && find_enum_constant(tok->value)) {
+        const struct enum_constant *constant = find_enum_constant(tok->value);
+        char text[32];
+        struct ast_node *literal;
+
+        snprintf(text, sizeof(text), "%ld", constant->value);
+        literal = create_ast_node_at(AST_INTLIT, text, NULL, NULL, tok->location);
+        literal->data_type = TYPE_INT;
+        (*token_index)++;
+        return literal;
     }
 
     if (tok->type == T_IDENTIFIER) {
@@ -1236,7 +1661,7 @@ struct ast_node* parse_additive(struct token *tokens, int *token_index)
 
 struct ast_node* create_ast_node(ASTNodeType type, char *value, struct ast_node *left, struct ast_node *right)
 {
-    SourceLocation location = {0, 0};
+    SourceLocation location = {0, 0, NULL};
 
     if (left) {
         location = left->location;

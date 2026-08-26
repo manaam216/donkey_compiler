@@ -18,6 +18,7 @@
  */
 
 typedef enum {
+    TY_VOID,
     TY_CHAR,
     TY_SHORT,
     TY_INT,
@@ -49,6 +50,7 @@ struct Type {
 };
 
 /* Basic types. These are shared singletons; never free or mutate them. */
+extern struct Type *ty_void;
 extern struct Type *ty_char;
 extern struct Type *ty_uchar;
 extern struct Type *ty_short;

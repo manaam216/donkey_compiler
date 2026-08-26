@@ -55,3 +55,4 @@ main:
 .L2:
     leave
     ret
+.section .note.GNU-stack,"",@progbits

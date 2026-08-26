@@ -26,3 +26,4 @@ main:
 .L0:
     leave
     ret
+.section .note.GNU-stack,"",@progbits

@@ -52,6 +52,9 @@ int diag_has_errors(void);
  */
 void diag_set_warnings_are_errors(int enabled);
 
+/* Drop warnings entirely, for -w. Errors are unaffected. */
+void diag_set_warnings_suppressed(int enabled);
+
 /*
  * True once so many errors have been reported that further ones are more
  * likely to be noise from a confused parser than real problems. Stages use it

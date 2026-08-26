@@ -678,6 +678,16 @@ static void generate_globals(struct cg_ctx *ctx, FILE *output)
 }
 
 /*
+ * Tell the linker the program does not need an executable stack. Without this
+ * note GNU ld assumes it might, marks the stack executable, and warns -- which
+ * is both a security regression and noise on every link.
+ */
+static void generate_stack_note(FILE *output)
+{
+    fprintf(output, ".section .note.GNU-stack,\"\",@progbits\n");
+}
+
+/*
  * System V passes the first six integer or pointer arguments in these
  * registers, in this order.
  */
@@ -761,6 +771,9 @@ static void generate_program(struct cg_ctx *ctx, struct ast_node *node, FILE *ou
             generate_function(ctx, node, output);
             break;
         case AST_GLOBAL_DECL:
+            break;
+        case AST_FUNCTION_DECL:
+            /* A prototype declares; there is nothing to emit for it. */
             break;
         case AST_STRUCT_DEF:
             break;
@@ -1291,6 +1304,7 @@ void write_assembly_to_file(const char *filename, struct ast_node *ast)
     memset(ctx, 0, sizeof(*ctx));
 
     generate_program(ctx, ast, out_file);
+    generate_stack_note(out_file);
     fclose(out_file);
 
     for (int i = 0; i < ctx->string_count; i++) {

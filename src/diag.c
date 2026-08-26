@@ -13,7 +13,67 @@ static const char *diag_function;
 static int diag_errors;
 static int diag_warnings;
 static int diag_warnings_are_errors;
+static int diag_warnings_suppressed;
 static int diag_suppressed;
+
+/*
+ * With #include, a diagnostic can point into a file other than the one named
+ * on the command line. Each file's text is loaded once and kept, so the quoted
+ * line always comes from the file the location actually names.
+ */
+struct source_file {
+    char *path;
+    char *text;
+    struct source_file *next;
+};
+
+static struct source_file *source_files;
+
+static char *load_file(const char *path)
+{
+    FILE *file = fopen(path, "rb");
+    char *text = NULL;
+    long size;
+
+    if (!file) {
+        return NULL;
+    }
+    if (fseek(file, 0, SEEK_END) == 0 && (size = ftell(file)) >= 0) {
+        rewind(file);
+        text = malloc((size_t)size + 1);
+        if (text) {
+            size_t read = fread(text, 1, (size_t)size, file);
+
+            text[read] = '\0';
+        }
+    }
+    fclose(file);
+    return text;
+}
+
+static const char *source_text_for(const char *path)
+{
+    struct source_file *entry;
+
+    if (!path) {
+        return diag_source;
+    }
+    for (entry = source_files; entry; entry = entry->next) {
+        if (strcmp(entry->path, path) == 0) {
+            return entry->text;
+        }
+    }
+
+    entry = calloc(1, sizeof(*entry));
+    if (!entry) {
+        return NULL;
+    }
+    entry->path = strdup(path);
+    entry->text = load_file(path);
+    entry->next = source_files;
+    source_files = entry;
+    return entry->text;
+}
 
 void diag_init(const char *source_path)
 {
@@ -48,6 +108,18 @@ void diag_init(const char *source_path)
 
 void diag_cleanup(void)
 {
+    struct source_file *entry = source_files;
+
+    while (entry) {
+        struct source_file *next = entry->next;
+
+        free(entry->path);
+        free(entry->text);
+        free(entry);
+        entry = next;
+    }
+    source_files = NULL;
+
     free(diag_source);
     diag_source = NULL;
     diag_source_length = 0;
@@ -62,6 +134,11 @@ void diag_set_function(const char *name)
 void diag_set_warnings_are_errors(int enabled)
 {
     diag_warnings_are_errors = enabled;
+}
+
+void diag_set_warnings_suppressed(int enabled)
+{
+    diag_warnings_suppressed = enabled;
 }
 
 int diag_error_count(void)
@@ -85,9 +162,9 @@ int diag_too_many_errors(void)
 }
 
 /* Start of the given 1-based line, or NULL if the source has no such line. */
-static const char *line_start(int line)
+static const char *line_start(const char *path, int line)
 {
-    const char *p = diag_source;
+    const char *p = source_text_for(path);
     int current = 1;
 
     if (!p || line < 1) {
@@ -109,7 +186,7 @@ static const char *line_start(int line)
  */
 static void print_source_line(SourceLocation location)
 {
-    const char *start = line_start(location.line);
+    const char *start = line_start(location.file, location.line);
     const char *p;
 
     if (!start || location.column < 1) {
@@ -158,6 +235,9 @@ void diag_at(DiagLevel level, SourceLocation location, const char *format, ...)
             return;
         }
     } else if (level == DIAG_WARNING) {
+        if (diag_warnings_suppressed) {
+            return;
+        }
         diag_warnings++;
     }
 
@@ -168,7 +248,10 @@ void diag_at(DiagLevel level, SourceLocation location, const char *format, ...)
     }
 
     if (location.line > 0) {
-        fprintf(stderr, "%s:%d:%d: %s: ", diag_path ? diag_path : "<input>",
+        const char *path = location.file ? location.file :
+            (diag_path ? diag_path : "<input>");
+
+        fprintf(stderr, "%s:%d:%d: %s: ", path,
             location.line, location.column, level_name(level));
     } else {
         fprintf(stderr, "%s: %s: ", diag_path ? diag_path : "<input>",
@@ -191,7 +274,8 @@ void diag_internal(SourceLocation location, const char *format, ...)
 
     if (location.line > 0) {
         fprintf(stderr, "%s:%d:%d: internal error: ",
-            diag_path ? diag_path : "<input>", location.line, location.column);
+            location.file ? location.file : (diag_path ? diag_path : "<input>"),
+            location.line, location.column);
     } else {
         fprintf(stderr, "%s: internal error: ", diag_path ? diag_path : "<input>");
     }

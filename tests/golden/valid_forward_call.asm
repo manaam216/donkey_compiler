@@ -28,3 +28,4 @@ add_two:
 .L1:
     leave
     ret
+.section .note.GNU-stack,"",@progbits
