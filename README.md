@@ -235,8 +235,11 @@ Supported expression features:
 - Single-level pointer declarations and parameters such as `int *p`
 - Local fixed-size integer arrays such as `int values[4]`
 - Global fixed-size integer arrays such as `int table[4]`
-- Brace initializers for arrays, with omitted elements zero-filled:
-  `int values[3] = {1, 2};`
+- Brace initializers for arrays and structs, with anything not covered left
+  zero: `int values[3] = {1, 2};`, `struct Point p = {1, 2};`
+- Designated initializers, which say where a value goes and let the ones after
+  it follow on: `int a[6] = {[1] = 10, [4] = 40};`,
+  `struct Point p = {.z = 30, .x = 10};`
 - Address-of, dereference, and indexing expressions: `&x`, `*p`, and `a[i]`
 - Struct field access through a pointer: `p->field`
 - `++` and `--` on any assignable expression, not only named variables:
@@ -449,7 +452,8 @@ This removes the `build/` directory.
   `TYPE (*name)(params)`. The general recursive declarator grammar, which would
   also give `int (*a)[10]`, is not implemented.
 - `long double` is not distinguished from `double`.
-- No compound literals or designated initialisers.
+- No compound literals: `(struct Point){1, 2}` does not parse. Designated
+  initializers, the more useful half of that pair, do.
 - No `union`, and no nested struct definitions.
 - Global initializers must be constant expressions.
 - Arrays cannot be assigned as whole values.

@@ -1419,10 +1419,48 @@ static void check_initializer_list_types(struct sema_ctx *ctx, struct ast_node *
         return;
     }
 
+    /*
+     * A struct is initialised member by member rather than by index, so the
+     * limit is how many members it has and each value converts to the type of
+     * the one it lands in.
+     */
+    if (declaration->array_length == 0 && declaration->struct_name) {
+        int struct_index = find_struct(ctx, declaration->struct_name);
+        int field = 0;
+
+        for (item = initializer_items(declaration->left); item; item = item->right) {
+            if (item->left && item->left->designator_field) {
+                field = find_struct_field(ctx, struct_index,
+                    item->left->designator_field);
+                if (field < 0) {
+                    semantic_error_at(ctx, item->left, "struct '%s' has no field '%s'",
+                        declaration->struct_name, item->left->designator_field);
+                    return;
+                }
+            }
+            if (struct_index < 0 || field >= ctx->structs[struct_index].field_count) {
+                semantic_error_at(ctx, item->left ? item->left : item,
+                    "too many initializers for '%s'", declaration->value);
+                return;
+            }
+            check_expression_type(ctx, &item->left);
+            if (item->left) {
+                insert_conversion(&item->left,
+                    ctx->structs[struct_index].fields[field].type);
+            }
+            field++;
+        }
+        return;
+    }
+
     for (item = initializer_items(declaration->left); item; item = item->right) {
+        /* A designator places its element; the ones after it follow on. */
+        if (item->left && item->left->designator_index >= 0) {
+            index = item->left->designator_index;
+        }
         if (index >= declaration->array_length) {
             semantic_error_at(ctx, item->left ? item->left : item,
-                "too many initializers for array '%s'", declaration->value);
+                "initializer for '%s' is outside the array", declaration->value);
             return;
         }
         check_expression_type(ctx, &item->left);
@@ -1455,7 +1493,13 @@ static void check_statement_types(struct sema_ctx *ctx, struct ast_node *node)
                 if (node->array_length > 0) {
                     check_initializer_list_types(ctx, node);
                 } else if (node->left->type == AST_INITIALIZER_LIST) {
-                    semantic_error_at(ctx, node->left, "initializer list is only valid for arrays");
+                    /* A struct may be brace-initialised too, field by field. */
+                    if (!node->struct_name) {
+                        semantic_error_at(ctx, node->left,
+                            "initializer list is only valid for arrays and structs");
+                    } else {
+                        check_initializer_list_types(ctx, node);
+                    }
                 } else {
                     check_expression_type(ctx, &node->left);
                     if (node->pointer_depth > 0 || semantic_effective_pointer_depth(node->left) > 0) {
@@ -1556,7 +1600,10 @@ static void check_top_level_types(struct sema_ctx *ctx, struct ast_node *node)
             if (node->array_length > 0) {
                 check_initializer_list_types(ctx, node);
             } else if (node->left->type == AST_INITIALIZER_LIST) {
-                semantic_error_at(ctx, node->left, "initializer list is only valid for arrays");
+                if (!node->struct_name) {
+                    semantic_error_at(ctx, node->left,
+                        "initializer list is only valid for arrays and structs");
+                }
             } else {
                 check_expression_type(ctx, &node->left);
                 insert_conversion(&node->left, node->data_type);

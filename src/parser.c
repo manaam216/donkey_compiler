@@ -528,12 +528,61 @@ static struct ast_node* parse_case_label(struct token *tokens, int *token_index)
 
 static struct ast_node* parse_initializer_list(struct token *tokens, int *token_index)
 {
+    int designator_index = -1;
+    char *designator_field = NULL;
+
     if (tokens[*token_index].type == T_CLOSEBRACE) {
         return NULL;
     }
 
+    /*
+     * A designator says where the element goes: `[2] =` for an array element,
+     * `.field =` for a struct member. Without one an element follows the
+     * previous, which is what makes a plain list work.
+     */
+    if (tokens[*token_index].type == T_OPENBRACKET) {
+        (*token_index)++;
+        if (tokens[*token_index].type == T_INTLIT) {
+            designator_index = atoi(tokens[*token_index].value);
+            (*token_index)++;
+        } else {
+            parse_error_at(&tokens[*token_index],
+                "array designator must be a constant index");
+        }
+        if (tokens[*token_index].type == T_CLOSEBRACKET) {
+            (*token_index)++;
+        } else {
+            parse_error_at(&tokens[*token_index], "expected ']' after the index");
+        }
+        if (tokens[*token_index].type == T_ASSIGN) {
+            (*token_index)++;
+        } else {
+            parse_error_at(&tokens[*token_index], "expected '=' after the designator");
+        }
+    } else if (tokens[*token_index].type == T_DOT) {
+        (*token_index)++;
+        if (tokens[*token_index].type == T_IDENTIFIER) {
+            designator_field = tokens[*token_index].value;
+            (*token_index)++;
+        } else {
+            parse_error_at(&tokens[*token_index],
+                "expected a field name after '.'");
+        }
+        if (tokens[*token_index].type == T_ASSIGN) {
+            (*token_index)++;
+        } else {
+            parse_error_at(&tokens[*token_index], "expected '=' after the designator");
+        }
+    }
+
     struct ast_node *initializer = parse_initializer(tokens, token_index);
     struct ast_node *rest = NULL;
+
+    if (initializer) {
+        initializer->designator_index = designator_index;
+        initializer->designator_field =
+            designator_field ? strdup(designator_field) : NULL;
+    }
     if (tokens[*token_index].type == T_COMMA) {
         (*token_index)++;
         rest = parse_initializer_list(tokens, token_index);
@@ -2101,6 +2150,8 @@ struct ast_node* create_ast_node_at(ASTNodeType type, char *value, struct ast_no
     node->struct_name = NULL;
     node->ty = NULL;
     node->sym = NULL;
+    node->designator_index = -1;
+    node->designator_field = NULL;
     node->location = location;
     node->value = value ? strdup(value) : NULL;
     node->left = left;
@@ -2115,6 +2166,7 @@ void free_ast_node(struct ast_node *node)
         free_ast_node(node->right);
         free(node->value);
         free(node->struct_name);
+        free(node->designator_field);
         free(node);
     }
 }

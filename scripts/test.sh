@@ -60,6 +60,7 @@ examples/pointers_structs.c pointers_structs
 examples/function_pointers.c function_pointers
 examples/struct_by_value.c struct_by_value
 examples/floating_point.c floating_point
+examples/initializers.c initializers
 examples/struct_pointers.c struct_pointers
 examples/struct_copy.c struct_copy
 examples/libc_call.c libc_call
@@ -265,7 +266,7 @@ expect_error tests/semantic/call_shadowed_function.c "called object 'helper' is 
 expect_error tests/semantic/invalid_pointer_assignment.c "cannot assign int to int*"
 expect_error tests/semantic/invalid_dereference.c "cannot dereference non-pointer expression"
 expect_error tests/semantic/invalid_pointer_addition.c "invalid operands to pointer arithmetic"
-expect_error tests/semantic/too_many_array_initializers.c "too many initializers for array 'values'"
+expect_error tests/semantic/too_many_array_initializers.c "initializer for 'values' is outside the array"
 expect_error tests/semantic/invalid_pointer_subtraction.c "cannot subtract incompatible pointer types"
 expect_error tests/semantic/struct_by_value.c "cannot pass a struct larger than 8 bytes by value yet"
 expect_error tests/limits/global_array_too_long.c "exceeds the supported length of 256"

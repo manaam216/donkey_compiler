@@ -1208,19 +1208,91 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
                  * frame pointer and return address.
                  */
                 int stride = ty_element_size(node->ty);
-                int index = 0;
+                struct Type *element = node->ty ? node->ty->base : NULL;
+                int index;
                 struct ast_node *item;
 
+                /*
+                 * Work out which elements the initialisers cover before
+                 * emitting anything, so only the gaps are zeroed. Designators
+                 * can leave holes -- `{[3] = 1}` writes one element of four --
+                 * while a plain list usually covers everything and needs no
+                 * zeroing at all.
+                 */
+                char *written = calloc((size_t)node->array_length, 1);
+
+                if (!written) {
+                    fprintf(output, "    /* out of memory */\n");
+                    break;
+                }
+                index = 0;
                 for (item = initializer_items(node->left); item; item = item->right) {
-                    generate_exp(ctx, item->left, output);
-                    emit_store_offset(node->ty ? node->ty->base : NULL,
-                        offset + (index * stride), output);
+                    if (item->left && item->left->designator_index >= 0) {
+                        index = item->left->designator_index;
+                    }
+                    if (index >= 0 && index < node->array_length) {
+                        written[index] = 1;
+                    }
                     index++;
                 }
-                while (index < node->array_length) {
-                    emit_zero_offset(node->ty ? node->ty->base : NULL,
-                        offset + (index * stride), output);
+                for (index = 0; index < node->array_length; index++) {
+                    if (!written[index]) {
+                        emit_zero_offset(element, offset + (index * stride), output);
+                    }
+                }
+                free(written);
+
+                index = 0;
+                for (item = initializer_items(node->left); item; item = item->right) {
+                    /*
+                     * A designator says where its element goes; the ones after
+                     * it continue from there, so the running index is set
+                     * rather than stepped.
+                     */
+                    if (item->left && item->left->designator_index >= 0) {
+                        index = item->left->designator_index;
+                    }
+                    if (index >= node->array_length) {
+                        diag_at(DIAG_ERROR, item->left->location,
+                            "initializer index %d is outside '%s'",
+                            index, node->value);
+                        break;
+                    }
+                    generate_exp(ctx, item->left, output);
+                    emit_store_offset(element, offset + (index * stride), output);
                     index++;
+                }
+            } else if (node->ty && node->ty->kind == TY_STRUCT && node->left) {
+                /*
+                 * Brace initialisation of a struct. Without a designator each
+                 * value fills the next member in declaration order; with one it
+                 * fills the member it names, and the rest follow from there.
+                 */
+                int offset = node->sym->offset;
+                struct Member *member = node->ty->members;
+                struct ast_node *item;
+                int i;
+
+                for (i = 0; i < node->ty->size; i += 4) {
+                    fprintf(output, "    movl    $0, %d(%%rbp)\n", offset + i);
+                }
+
+                for (item = initializer_items(node->left); item && member;
+                     item = item->right) {
+                    if (item->left && item->left->designator_field) {
+                        member = ty_find_member(node->ty,
+                            item->left->designator_field);
+                        if (!member) {
+                            diag_at(DIAG_ERROR, item->left->location,
+                                "'%s' has no field '%s'",
+                                node->struct_name ? node->struct_name : "struct",
+                                item->left->designator_field);
+                            break;
+                        }
+                    }
+                    generate_exp(ctx, item->left, output);
+                    emit_store_offset(member->ty, offset + member->offset, output);
+                    member = member->next;
                 }
             } else if (node->left) {
                 /*

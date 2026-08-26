@@ -224,6 +224,14 @@ struct ast_node {
 
     /* AST_CALL through a function pointer, so the call is indirect. */
     int is_indirect_call;
+
+    /*
+     * On an initializer-list element, the designator that placed it:
+     * `[2] = x` sets designator_index, `.field = x` sets designator_field.
+     * An element with neither follows the one before it, as C requires.
+     */
+    int designator_index;
+    char *designator_field;
     char *struct_name;
 
     /*
