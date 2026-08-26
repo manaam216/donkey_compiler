@@ -36,9 +36,9 @@ main:
     movl    $0, -72(%rbp)
     movl    $0, -68(%rbp)
     movl    $30, %eax
-    movl    %eax, -76(%rbp)
-    movl    $10, %eax
     movl    %eax, -68(%rbp)
+    movl    $10, %eax
+    movl    %eax, -76(%rbp)
     movl    $0, -88(%rbp)
     movl    $0, -84(%rbp)
     movl    $0, -80(%rbp)
@@ -188,7 +188,7 @@ main:
     movl    -92(%rbp), %eax
     pushq   %rax
     leaq    -64(%rbp), %rax
-    addq    $8, %rax
+    addq    $0, %rax
     movl    (%rax), %eax
     popq    %rdx
     addl    %edx, %eax
@@ -200,7 +200,7 @@ main:
     addl    %edx, %eax
     pushq   %rax
     leaq    -64(%rbp), %rax
-    addq    $0, %rax
+    addq    $8, %rax
     movl    (%rax), %eax
     popq    %rdx
     addl    %edx, %eax
@@ -212,7 +212,7 @@ main:
     movl    -92(%rbp), %eax
     pushq   %rax
     leaq    -76(%rbp), %rax
-    addq    $8, %rax
+    addq    $0, %rax
     movl    (%rax), %eax
     popq    %rdx
     addl    %edx, %eax
@@ -224,7 +224,7 @@ main:
     addl    %edx, %eax
     pushq   %rax
     leaq    -76(%rbp), %rax
-    addq    $0, %rax
+    addq    $8, %rax
     movl    (%rax), %eax
     popq    %rdx
     addl    %edx, %eax
@@ -236,7 +236,7 @@ main:
     movl    -92(%rbp), %eax
     pushq   %rax
     leaq    -88(%rbp), %rax
-    addq    $8, %rax
+    addq    $0, %rax
     movl    (%rax), %eax
     popq    %rdx
     addl    %edx, %eax
@@ -248,7 +248,7 @@ main:
     addl    %edx, %eax
     pushq   %rax
     leaq    -88(%rbp), %rax
-    addq    $0, %rax
+    addq    $8, %rax
     movl    (%rax), %eax
     popq    %rdx
     addl    %edx, %eax

@@ -220,6 +220,28 @@ static struct Type *resolve_type(struct sema_ctx *ctx, struct ast_node *node)
     struct Type *type = base_type_for(ctx, node);
     int i;
 
+    /*
+     * A declarator that nested records how it derives its type; applying the
+     * steps in order is what distinguishes a pointer to an array from an array
+     * of pointers.
+     */
+    if (node->derivation_count > 0) {
+        for (i = 0; i < node->derivation_count; i++) {
+            switch (node->derivations[i].kind) {
+                case DERIVE_POINTER:
+                    type = ty_pointer_to(type);
+                    break;
+                case DERIVE_ARRAY:
+                    type = ty_array_of(type, node->derivations[i].length);
+                    break;
+                case DERIVE_FUNCTION:
+                    type = ty_func(type);
+                    break;
+            }
+        }
+        return type;
+    }
+
     /* A function pointer points at a function returning the base type. */
     if (node->is_function_pointer) {
         return ty_pointer_to(ty_func(type));

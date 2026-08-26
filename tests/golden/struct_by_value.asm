@@ -5,11 +5,11 @@ sum:
     subq    $16, %rsp
     movq    %rdi, -8(%rbp)
     leaq    -8(%rbp), %rax
-    addq    $4, %rax
+    addq    $0, %rax
     movl    (%rax), %eax
     pushq   %rax
     leaq    -8(%rbp), %rax
-    addq    $0, %rax
+    addq    $4, %rax
     movl    (%rax), %eax
     popq    %rdx
     addl    %edx, %eax
@@ -26,11 +26,11 @@ scaled:
     movq    %rdi, -8(%rbp)
     movl    %esi, -12(%rbp)
     leaq    -8(%rbp), %rax
-    addq    $4, %rax
+    addq    $0, %rax
     movl    (%rax), %eax
     pushq   %rax
     leaq    -8(%rbp), %rax
-    addq    $0, %rax
+    addq    $4, %rax
     movl    (%rax), %eax
     popq    %rdx
     addl    %edx, %eax
@@ -67,14 +67,14 @@ main:
     movl    $3, %eax
     pushq   %rax
     leaq    -8(%rbp), %rax
-    addq    $4, %rax
+    addq    $0, %rax
     popq    %rdx
     movl    %edx, (%rax)
     movl    %edx, %eax
     movl    $4, %eax
     pushq   %rax
     leaq    -8(%rbp), %rax
-    addq    $0, %rax
+    addq    $4, %rax
     popq    %rdx
     movl    %edx, (%rax)
     movl    %edx, %eax

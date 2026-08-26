@@ -521,6 +521,178 @@ static char *parse_function_pointer_declarator(struct token *tokens,
     return name;
 }
 
+/*
+ * The general C declarator grammar.
+ *
+ * A declarator derives its type from the base inside-out, and parentheses
+ * change the nesting: `int *a[10]` is an array of pointers, `int (*a)[10]` a
+ * pointer to an array. The two differ only in where the parentheses sit, so a
+ * left-to-right reading cannot tell them apart.
+ *
+ * The trick for handling the parenthesised form is to parse the inner
+ * declarator twice. On seeing '(' the inner text is skipped so the suffix
+ * after the closing parenthesis can be applied first -- that suffix binds to
+ * whatever the inner declarator names -- and only then is the inner text
+ * parsed for real. Each step is appended to a list in the order it applies.
+ */
+struct declarator_result {
+    char *name;
+    SourceLocation location;
+};
+
+static void derive(struct ast_node *node, int kind, int length,
+    struct token *tokens, int *token_index)
+{
+    if (node->derivation_count >= DONKEY_MAX_DERIVATIONS) {
+        parse_error_at(&tokens[*token_index],
+            "declarator nests more than %d levels deep", DONKEY_MAX_DERIVATIONS);
+        return;
+    }
+    node->derivations[node->derivation_count].kind = kind;
+    node->derivations[node->derivation_count].length = length;
+    node->derivation_count++;
+}
+
+/* Step over a parenthesised run, leaving *token_index just past its close. */
+static void skip_parenthesised(struct token *tokens, int *token_index)
+{
+    int depth = 0;
+
+    do {
+        if (tokens[*token_index].type == T_OPENPAREN) {
+            depth++;
+        } else if (tokens[*token_index].type == T_CLOSEPAREN) {
+            depth--;
+        }
+        (*token_index)++;
+    } while (depth > 0 && tokens[*token_index - 1].type != T_EOF);
+}
+
+/* The [] and () that follow a declarator, applied nearest-first. */
+static void parse_declarator_suffix(struct ast_node *node, struct token *tokens,
+    int *token_index)
+{
+    for (;;) {
+        if (tokens[*token_index].type == T_OPENBRACKET) {
+            int length = parse_array_length(tokens, token_index);
+
+            derive(node, DERIVE_ARRAY, length, tokens, token_index);
+        } else if (tokens[*token_index].type == T_OPENPAREN) {
+            skip_parenthesised(tokens, token_index);
+            derive(node, DERIVE_FUNCTION, 0, tokens, token_index);
+        } else {
+            return;
+        }
+    }
+}
+
+static int parse_declarator(struct ast_node *node, struct token *tokens,
+    int *token_index, struct declarator_result *result)
+{
+    int stars = 0;
+    int i;
+
+    while (tokens[*token_index].type == T_STAR) {
+        stars++;
+        (*token_index)++;
+        skip_declaration_prefixes(tokens, token_index);
+    }
+    for (i = 0; i < stars; i++) {
+        derive(node, DERIVE_POINTER, 0, tokens, token_index);
+    }
+
+    if (tokens[*token_index].type == T_OPENPAREN) {
+        int inner = *token_index + 1;
+        int after;
+
+        skip_parenthesised(tokens, token_index);
+        after = *token_index;
+
+        /* The suffix binds to what the inner declarator names, so it goes first. */
+        parse_declarator_suffix(node, tokens, token_index);
+
+        {
+            int saved = *token_index;
+            int inner_index = inner;
+
+            *token_index = inner_index;
+            if (!parse_declarator(node, tokens, token_index, result)) {
+                return 0;
+            }
+            *token_index = saved;
+        }
+        (void)after;
+        return 1;
+    }
+
+    if (tokens[*token_index].type != T_IDENTIFIER) {
+        return 0;
+    }
+    result->name = tokens[*token_index].value;
+    result->location = tokens[*token_index].location;
+    (*token_index)++;
+
+    parse_declarator_suffix(node, tokens, token_index);
+    return 1;
+}
+
+/*
+ * Postfix operators -- [], ., and -> -- applied to whatever precedes them.
+ *
+ * These used to be handled only after an identifier, which meant a
+ * parenthesised expression could not carry them: neither `(*p)[1]` for a
+ * pointer to an array nor `(struct P){1, 2}.x` for a compound literal would
+ * parse. They bind to any primary expression, so that is where they belong.
+ */
+static struct ast_node *parse_postfix(struct ast_node *id, struct token *tokens,
+    int *token_index)
+{
+    while (tokens[*token_index].type == T_OPENBRACKET ||
+           tokens[*token_index].type == T_DOT ||
+           tokens[*token_index].type == T_ARROW) {
+        if (tokens[*token_index].type == T_ARROW) {
+        /* p->field means (*p).field, and is built as exactly that. */
+        SourceLocation arrow_location = tokens[*token_index].location;
+
+        (*token_index)++;
+        if (tokens[*token_index].type != T_IDENTIFIER) {
+            parse_error_at(&tokens[*token_index],
+                "expected a field name after '->'");
+            break;
+        }
+        id = create_ast_node_at(AST_FIELD_ACCESS, tokens[*token_index].value,
+            create_ast_node_at(AST_DEREFERENCE, NULL, id, NULL, arrow_location),
+            NULL, arrow_location);
+        (*token_index)++;
+        continue;
+        }
+        if (tokens[*token_index].type == T_DOT) {
+        SourceLocation dot_location = tokens[*token_index].location;
+        (*token_index)++;
+        if (tokens[*token_index].type != T_IDENTIFIER) {
+            parse_error_at(&tokens[*token_index], "expected field name, found '%s'",
+                tokens[*token_index].value);
+        }
+        id = create_ast_node_at(AST_FIELD_ACCESS, tokens[*token_index].value, id, NULL,
+            dot_location);
+        (*token_index)++;
+        continue;
+        }
+        SourceLocation bracket_location = tokens[*token_index].location;
+        (*token_index)++;
+        struct ast_node *index = parse_exp(tokens, token_index);
+        if (tokens[*token_index].type != T_CLOSEBRACKET) {
+        parse_error_at(&tokens[*token_index], "expected ']', found '%s'",
+            tokens[*token_index].value);
+        } else {
+        (*token_index)++;
+        }
+        id = create_ast_node_at(AST_ARRAY_SUBSCRIPT, NULL, id, index, bracket_location);
+    }
+
+    return id;
+}
+
 static struct ast_node* parse_initializer(struct token *tokens, int *token_index);
 static struct ast_node* parse_do_while_statement(struct token *tokens, int *token_index);
 static struct ast_node* parse_switch_statement(struct token *tokens, int *token_index);
@@ -788,6 +960,7 @@ struct ast_node* parse_struct_definition(struct token *tokens, int *token_index)
 {
     SourceLocation location = tokens[*token_index].location;
     struct ast_node *fields = NULL;
+    struct ast_node **fields_tail = &fields;
 
     (*token_index)++;
     if (tokens[*token_index].type != T_IDENTIFIER) {
@@ -824,7 +997,15 @@ struct ast_node* parse_struct_definition(struct token *tokens, int *token_index)
                 tokens[*token_index].value);
         }
         (*token_index)++;
-        fields = create_ast_node(AST_FIELD_LIST, NULL, field, fields);
+        /*
+         * Append rather than prepend. Building the list backwards laid every
+         * struct out in reverse: direct field access stayed self-consistent
+         * and looked correct, but anything that depends on declaration order
+         * -- a brace initializer, or matching another compiler's layout --
+         * was wrong.
+         */
+        *fields_tail = create_ast_node(AST_FIELD_LIST, NULL, field, NULL);
+        fields_tail = &(*fields_tail)->right;
     }
     (*token_index)++;
     if (tokens[*token_index].type != T_SEMICOLON) {
@@ -1398,8 +1579,78 @@ struct ast_node* parse_declaration(struct token *tokens, int *token_index)
         struct ast_node *initializer = NULL;
         struct ast_node *declaration;
 
+        /*
+         * A declarator with parentheses nests, so it goes through the general
+         * grammar; the flat fields cannot tell a pointer to an array from an
+         * array of pointers.
+         */
+        if (tokens[*token_index].type == T_OPENPAREN) {
+            struct ast_node *declaration = create_ast_node_at(AST_DECL, NULL,
+                NULL, NULL, tokens[*token_index].location);
+            struct declarator_result found;
+            int d;
+
+            found.name = NULL;
+            found.location = tokens[*token_index].location;
+            if (!parse_declarator(declaration, tokens, token_index, &found)) {
+                parse_error_at(&tokens[*token_index],
+                    "expected a name in the declarator");
+                return first;
+            }
+
+            declaration->value = found.name ? strdup(found.name) : NULL;
+            declaration->location = found.location;
+            declaration->data_type = type_from_name(type_name);
+            declaration->struct_name = struct_name ? strdup(struct_name) : NULL;
+
+            /* A pointer to a function is called indirectly. */
+            for (d = 0; d + 1 < declaration->derivation_count; d++) {
+                if (declaration->derivations[d].kind == DERIVE_FUNCTION &&
+                    declaration->derivations[d + 1].kind == DERIVE_POINTER) {
+                    declaration->is_function_pointer = 1;
+                }
+            }
+
+            /*
+             * The outermost step says what the object is. The flat fields the
+             * type checker still reads cannot express the nesting, but they can
+             * at least agree on that much -- a pointer to an array is a
+             * pointer.
+             */
+            if (declaration->derivation_count > 0) {
+                int last = declaration->derivation_count - 1;
+
+                if (declaration->derivations[last].kind == DERIVE_POINTER) {
+                    declaration->pointer_depth = 1;
+                } else if (declaration->derivations[last].kind == DERIVE_ARRAY) {
+                    declaration->array_length = declaration->derivations[last].length;
+                    declaration->array_dims[0] = declaration->array_length;
+                    declaration->array_dim_count = 1;
+                }
+            }
+
+            if (tokens[*token_index].type == T_ASSIGN) {
+                (*token_index)++;
+                declaration->left = parse_initializer(tokens, token_index);
+            }
+
+            if (first == NULL) {
+                first = declaration;
+                tail = &first;
+            } else {
+                *tail = create_ast_node(AST_STATEMENT_LIST, NULL, *tail, declaration);
+                tail = &(*tail)->right;
+            }
+
+            if (tokens[*token_index].type != T_COMMA) {
+                break;
+            }
+            (*token_index)++;
+            continue;
+        }
+
         /* TYPE (*name)(params) declares a pointer to a function. */
-        function_pointer_name = parse_function_pointer_declarator(tokens, token_index);
+        function_pointer_name = NULL;
         if (function_pointer_name) {
             struct ast_node *declaration = create_ast_node_at(AST_DECL,
                 function_pointer_name, NULL, NULL, tokens[*token_index].location);
@@ -1764,48 +2015,8 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
 
         struct ast_node *id = create_ast_node_at(AST_IDENTIFIER, name, NULL, NULL,
             identifier_location);
-        while (tokens[*token_index].type == T_OPENBRACKET ||
-               tokens[*token_index].type == T_DOT ||
-               tokens[*token_index].type == T_ARROW) {
-            if (tokens[*token_index].type == T_ARROW) {
-                /* p->field means (*p).field, and is built as exactly that. */
-                SourceLocation arrow_location = tokens[*token_index].location;
-
-                (*token_index)++;
-                if (tokens[*token_index].type != T_IDENTIFIER) {
-                    parse_error_at(&tokens[*token_index],
-                        "expected a field name after '->'");
-                    break;
-                }
-                id = create_ast_node_at(AST_FIELD_ACCESS, tokens[*token_index].value,
-                    create_ast_node_at(AST_DEREFERENCE, NULL, id, NULL, arrow_location),
-                    NULL, arrow_location);
-                (*token_index)++;
-                continue;
-            }
-            if (tokens[*token_index].type == T_DOT) {
-                SourceLocation dot_location = tokens[*token_index].location;
-                (*token_index)++;
-                if (tokens[*token_index].type != T_IDENTIFIER) {
-                    parse_error_at(&tokens[*token_index], "expected field name, found '%s'",
-                        tokens[*token_index].value);
-                }
-                id = create_ast_node_at(AST_FIELD_ACCESS, tokens[*token_index].value, id, NULL,
-                    dot_location);
-                (*token_index)++;
-                continue;
-            }
-            SourceLocation bracket_location = tokens[*token_index].location;
-            (*token_index)++;
-            struct ast_node *index = parse_exp(tokens, token_index);
-            if (tokens[*token_index].type != T_CLOSEBRACKET) {
-                parse_error_at(&tokens[*token_index], "expected ']', found '%s'",
-                    tokens[*token_index].value);
-            } else {
-                (*token_index)++;
-            }
-            id = create_ast_node_at(AST_ARRAY_SUBSCRIPT, NULL, id, index, bracket_location);
-        }
+        
+        id = parse_postfix(id, tokens, token_index);
         if (tokens[*token_index].type == T_PLUS_PLUS) {
             SourceLocation operator_location = tokens[*token_index].location;
             (*token_index)++;
@@ -1849,7 +2060,7 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
                 parse_initializer(tokens, token_index), NULL, paren_location);
             literal->data_type = type_from_name(type_name);
             literal->struct_name = struct_tag ? strdup(struct_tag) : NULL;
-            return literal;
+            return parse_postfix(literal, tokens, token_index);
         }
 
         /* Not a compound literal after all: an ordinary cast, or a group. */
@@ -1870,7 +2081,8 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
         } else {
             (*token_index)++;
         }
-        return inner_exp;
+        /* A parenthesised expression is a primary, so `(*p)[1]` works. */
+        return parse_postfix(inner_exp, tokens, token_index);
     }
 
     parse_error_at(tok, "unexpected token '%s' in expression parsing", tok->value);

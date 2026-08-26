@@ -5,11 +5,11 @@ sum:
     subq    $16, %rsp
     movq    %rdi, -8(%rbp)
     leaq    -8(%rbp), %rax
-    addq    $4, %rax
+    addq    $0, %rax
     movl    (%rax), %eax
     pushq   %rax
     leaq    -8(%rbp), %rax
-    addq    $0, %rax
+    addq    $4, %rax
     movl    (%rax), %eax
     popq    %rdx
     addl    %edx, %eax
@@ -52,7 +52,7 @@ main:
     movl    $0, -28(%rbp)
     movl    $0, -24(%rbp)
     movl    $5, %eax
-    movl    %eax, -28(%rbp)
+    movl    %eax, -24(%rbp)
     leaq    -28(%rbp), %rax
     movq    0(%rax), %rdx
     pushq   %rdx
@@ -81,13 +81,13 @@ main:
     movl    -12(%rbp), %eax
     pushq   %rax
     leaq    -8(%rbp), %rax
-    addq    $4, %rax
+    addq    $0, %rax
     movl    (%rax), %eax
     popq    %rdx
     addl    %edx, %eax
     pushq   %rax
     leaq    -8(%rbp), %rax
-    addq    $0, %rax
+    addq    $4, %rax
     movl    (%rax), %eax
     popq    %rdx
     addl    %edx, %eax

@@ -457,9 +457,11 @@ This removes the `build/` directory.
   `TYPE (*name)(params)`. The general recursive declarator grammar, which would
   also give `int (*a)[10]`, is not implemented.
 - `long double` is not distinguished from `double`.
-- A compound literal can be passed, assigned, and initialised with designators,
-  but a member cannot be taken from one directly: `(struct Point){1, 2}.x` does
-  not parse. Postfix operators apply only to a named primary.
+- Declarators nest, so `int (*p)[4]` parses as a pointer to an array and
+  `int *a[10]` as an array of pointers. Using a pointer to an array is limited
+  though: the type checker still reads the flat type fields the parser
+  produces, which cannot express that nesting, so `(*p)[1]` is rejected even
+  though the declaration itself is understood.
 - No `union`, and no nested struct definitions.
 - Global initializers must be constant expressions.
 - Arrays cannot be assigned as whole values.

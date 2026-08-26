@@ -6,6 +6,9 @@
 /* Nesting depth for array declarators, as in int a[2][3][4]. */
 #define DONKEY_MAX_ARRAY_DIMS 4
 
+/* Derivation steps in one declarator, as in int (*a[3])(void). */
+#define DONKEY_MAX_DERIVATIONS 8
+
 typedef enum {
     T_OPENBRACE,
     T_CLOSEBRACE,
@@ -217,11 +220,23 @@ struct ast_node {
     int array_dim_count;
 
     /*
-     * Set on a declarator written as TYPE (*name)(params): the name is a
-     * pointer to a function returning TYPE, not a plain pointer. Calls through
+     * Set on a declarator that names a pointer to a function, so calls through
      * it are indirect.
      */
     int is_function_pointer;
+
+    /*
+     * How a declarator derives its type from the base type, in the order the
+     * steps apply. `int (*a)[10]` yields ARRAY(10) then POINTER -- a is a
+     * pointer to an array -- while `int *a[10]` yields POINTER then ARRAY(10),
+     * an array of pointers. The flat fields above cannot tell those apart,
+     * which is why a declarator with parentheses records its derivation here.
+     */
+    struct {
+        enum { DERIVE_POINTER, DERIVE_ARRAY, DERIVE_FUNCTION } kind;
+        int length;                 /* DERIVE_ARRAY */
+    } derivations[DONKEY_MAX_DERIVATIONS];
+    int derivation_count;
 
     /* AST_CALL through a function pointer, so the call is indirect. */
     int is_indirect_call;

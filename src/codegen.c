@@ -762,13 +762,18 @@ static void generate_initializer_into(struct cg_ctx *ctx, struct Type *ty,
         for (i = 0; i < ty->size; i += 4) {
             fprintf(output, "    movl    $0, %d(%%rbp)\n", offset + i);
         }
-        for (item = initializer_items(initializer); item && member;
-             item = item->right) {
+        for (item = initializer_items(initializer); item; item = item->right) {
+            /*
+             * A designator names its member, so it is looked up before the
+             * running one is consulted. Testing that first matters: after a
+             * designator that named the last member there is no next one, and
+             * requiring one would drop every element after it.
+             */
             if (item->left && item->left->designator_field) {
                 member = ty_find_member(ty, item->left->designator_field);
-                if (!member) {
-                    break;
-                }
+            }
+            if (!member) {
+                break;
             }
             generate_exp(ctx, item->left, output);
             emit_store_offset(member->ty, offset + member->offset, output);
@@ -1417,8 +1422,12 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
                     fprintf(output, "    movl    $0, %d(%%rbp)\n", offset + i);
                 }
 
-                for (item = initializer_items(node->left); item && member;
-                     item = item->right) {
+                for (item = initializer_items(node->left); item; item = item->right) {
+                    /*
+                     * Look the designator up before consulting the running
+                     * member: after one that named the last field there is no
+                     * next, and requiring one would drop what follows.
+                     */
                     if (item->left && item->left->designator_field) {
                         member = ty_find_member(node->ty,
                             item->left->designator_field);
@@ -1429,6 +1438,9 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
                                 item->left->designator_field);
                             break;
                         }
+                    }
+                    if (!member) {
+                        break;
                     }
                     generate_exp(ctx, item->left, output);
                     emit_store_offset(member->ty, offset + member->offset, output);

@@ -60,7 +60,7 @@ main:
     call    first
     pushq   %rax
     leaq    -56(%rbp), %rax
-    addq    $4, %rax
+    addq    $0, %rax
     popq    %rdx
     movl    %edx, (%rax)
     movl    %edx, %eax
@@ -75,16 +75,16 @@ main:
     idivq   %rcx
     pushq   %rax
     leaq    -56(%rbp), %rax
-    addq    $0, %rax
+    addq    $4, %rax
     popq    %rdx
     movl    %edx, (%rax)
     movl    %edx, %eax
     leaq    -56(%rbp), %rax
-    addq    $4, %rax
+    addq    $0, %rax
     movl    (%rax), %eax
     pushq   %rax
     leaq    -56(%rbp), %rax
-    addq    $0, %rax
+    addq    $4, %rax
     movl    (%rax), %eax
     popq    %rdx
     addl    %edx, %eax
