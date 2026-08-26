@@ -168,6 +168,128 @@ static void add_global_node(struct ast_node *node)
     global_count++;
 }
 
+/* ------------------------------------------------------ floating point -- */
+
+/*
+ * Floating-point values live in %xmm0, not %rax, so they need a parallel set
+ * of moves. The suffix follows the width: ss for a 4-byte float, sd for an
+ * 8-byte double. Everything else about the stack machine is unchanged --
+ * intermediate values are pushed and popped, just through %xmm registers.
+ */
+static const char *fp_suffix(struct Type *ty)
+{
+    return ty && ty->size == 4 ? "ss" : "sd";
+}
+
+/* Interned floating-point constants, emitted into .data and loaded from there. */
+struct cg_double {
+    char *text;
+    int is_float;
+    int label;
+};
+
+static struct cg_double *fp_constants;
+static int fp_constant_count;
+static int fp_constant_capacity;
+
+static int intern_fp_constant(const char *text, int is_float)
+{
+    int i;
+
+    for (i = 0; i < fp_constant_count; i++) {
+        if (fp_constants[i].is_float == is_float &&
+            strcmp(fp_constants[i].text, text) == 0) {
+            return fp_constants[i].label;
+        }
+    }
+
+    if (fp_constant_count >= fp_constant_capacity) {
+        fp_constant_capacity = fp_constant_capacity ? fp_constant_capacity * 2 : 16;
+        fp_constants = realloc(fp_constants,
+            (size_t)fp_constant_capacity * sizeof(*fp_constants));
+        if (!fp_constants) {
+            fprintf(stderr, "Out of memory in the code generator\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    fp_constants[fp_constant_count].text = strdup(text);
+    /*
+     * The f suffix tells the lexer the literal is a float; the assembler
+     * directive takes only the number, so drop it here.
+     */
+    {
+        char *stored = fp_constants[fp_constant_count].text;
+        size_t length = strlen(stored);
+
+        if (length > 0 && (stored[length - 1] == 'f' || stored[length - 1] == 'F')) {
+            stored[length - 1] = 0;
+        }
+    }
+    fp_constants[fp_constant_count].is_float = is_float;
+    fp_constants[fp_constant_count].label = fp_constant_count;
+    return fp_constants[fp_constant_count++].label;
+}
+
+static void free_fp_constants(void)
+{
+    int i;
+
+    for (i = 0; i < fp_constant_count; i++) {
+        free(fp_constants[i].text);
+    }
+    free(fp_constants);
+    fp_constants = NULL;
+    fp_constant_count = 0;
+    fp_constant_capacity = 0;
+}
+
+/* Push and pop the floating-point accumulator, mirroring pushq/popq. */
+static void emit_fp_push(struct Type *ty, FILE *output)
+{
+    fprintf(output, "    subq    $8, %%rsp\n");
+    fprintf(output, "    mov%s   %%xmm0, (%%rsp)\n", fp_suffix(ty));
+}
+
+static void emit_fp_pop(struct Type *ty, const char *reg, FILE *output)
+{
+    fprintf(output, "    mov%s   (%%rsp), %%%s\n", fp_suffix(ty), reg);
+    fprintf(output, "    addq    $8, %%rsp\n");
+}
+
+static void emit_fp_load_frame(struct Type *ty, int offset, FILE *output)
+{
+    fprintf(output, "    mov%s   %d(%%rbp), %%xmm0\n", fp_suffix(ty), offset);
+}
+
+static void emit_fp_store_frame(struct Type *ty, int offset, FILE *output)
+{
+    fprintf(output, "    mov%s   %%xmm0, %d(%%rbp)\n", fp_suffix(ty), offset);
+}
+
+/* Convert whatever is in %eax to floating point in %xmm0. */
+static void emit_int_to_fp(struct Type *target, FILE *output)
+{
+    fprintf(output, "    cvtsi2%s %%eax, %%xmm0\n", fp_suffix(target));
+}
+
+/* Convert %xmm0 to an integer in %eax, truncating as C requires. */
+static void emit_fp_to_int(struct Type *source, FILE *output)
+{
+    fprintf(output, "    cvtt%s2si %%xmm0, %%eax\n", fp_suffix(source));
+}
+
+static void emit_fp_widen(struct Type *from, struct Type *to, FILE *output)
+{
+    if (!from || !to || from->size == to->size) {
+        return;
+    }
+    if (from->size == 4) {
+        fprintf(output, "    cvtss2sd %%xmm0, %%xmm0\n");
+    } else {
+        fprintf(output, "    cvtsd2ss %%xmm0, %%xmm0\n");
+    }
+}
+
 /*
  * Access width follows the type. A 4-byte movl for a char element would read
  * past it and, on a store, clobber its neighbours; an 8-byte pointer or long
@@ -245,6 +367,11 @@ static void emit_store_indirect(struct Type *ty, FILE *output)
  */
 static void emit_store_slot(struct Type *ty, int offset, FILE *output)
 {
+    /* A floating value is in %xmm0, not %rax. */
+    if (ty_is_float(ty)) {
+        emit_fp_store_frame(ty, offset, output);
+        return;
+    }
     if (ty && ty->size == 8) {
         fprintf(output, "    movq    %%rax, %d(%%rbp)\n", offset);
     } else {
@@ -254,6 +381,11 @@ static void emit_store_slot(struct Type *ty, int offset, FILE *output)
 
 static void emit_zero_slot(struct Type *ty, int offset, FILE *output)
 {
+    /* Zeroing a floating slot writes the bit pattern, so an integer store. */
+    if (ty_is_float(ty)) {
+        fprintf(output, "    movq    $0, %d(%%rbp)\n", offset);
+        return;
+    }
     if (ty && ty->size == 8) {
         fprintf(output, "    movq    $0, %d(%%rbp)\n", offset);
     } else {
@@ -517,6 +649,16 @@ static void generate_identifier_load(struct ast_node *node, FILE *output)
         return;
     }
 
+    if (ty_is_float(sym->ty)) {
+        if (is_frame_symbol(sym)) {
+            emit_fp_load_frame(sym->ty, sym->offset, output);
+        } else {
+            fprintf(output, "    mov%s   %s(%%rip), %%xmm0\n",
+                fp_suffix(sym->ty), sym->name);
+        }
+        return;
+    }
+
     if (is_frame_symbol(sym)) {
         /* An array's value is its address; anything else is loaded. */
         if (is_array) {
@@ -537,6 +679,16 @@ static void generate_identifier_load(struct ast_node *node, FILE *output)
 static void generate_identifier_store(struct ast_node *node, FILE *output)
 {
     struct Symbol *sym = node->sym;
+
+    if (ty_is_float(sym->ty)) {
+        if (is_frame_symbol(sym)) {
+            emit_fp_store_frame(sym->ty, sym->offset, output);
+        } else {
+            fprintf(output, "    mov%s   %%xmm0, %s(%%rip)\n",
+                fp_suffix(sym->ty), sym->name);
+        }
+        return;
+    }
 
     if (is_frame_symbol(sym)) {
         emit_store_slot(sym->ty, sym->offset, output);
@@ -632,6 +784,27 @@ static int sizeof_node(struct ast_node *node)
         return ty_from_name(node->value)->size;
     }
     return 4;
+}
+
+/*
+ * A cast that crosses between integer and floating point is a conversion
+ * instruction, not a narrowing move: the value changes representation as well
+ * as width. The node's own type says what it is being converted to, and the
+ * operand's says what from.
+ */
+static void generate_cast_between(struct Type *from, struct Type *to, FILE *output)
+{
+    if (ty_is_float(from) && ty_is_float(to)) {
+        emit_fp_widen(from, to, output);
+        return;
+    }
+    if (ty_is_float(from)) {
+        emit_fp_to_int(from, output);       /* truncates, as C requires */
+        return;
+    }
+    if (ty_is_float(to)) {
+        emit_int_to_fp(to, output);
+    }
 }
 
 static void generate_cast(const char *type, FILE *output)
@@ -864,6 +1037,30 @@ static void generate_globals(struct cg_ctx *ctx, FILE *output)
 }
 
 /*
+ * Floating constants are written after the code, not before it. SSE cannot
+ * take an immediate, so each one becomes a labelled datum -- but which ones
+ * exist is only known once every function body has been generated.
+ */
+static void generate_fp_constants(FILE *output)
+{
+    int i;
+
+    if (fp_constant_count == 0) {
+        return;
+    }
+
+    fprintf(output, ".data\n");
+    for (i = 0; i < fp_constant_count; i++) {
+        fprintf(output, "    .align  %d\n", fp_constants[i].is_float ? 4 : 8);
+        fprintf(output, ".LF%d:\n", fp_constants[i].label);
+        fprintf(output, "    .%s   %s\n",
+            fp_constants[i].is_float ? "float " : "double",
+            fp_constants[i].text);
+    }
+    fprintf(output, ".text\n");
+}
+
+/*
  * Tell the linker the program does not need an executable stack. Without this
  * note GNU ld assumes it might, marks the stack executable, and warns -- which
  * is both a security regression and noise on every link.
@@ -889,14 +1086,31 @@ static void emit_spill_parameter(struct Symbol *sym, FILE *output)
     if (i >= 6) {
         return;             /* already on the stack, addressed in place */
     }
+
+    /*
+     * A floating parameter arrives in an SSE register, counted separately from
+     * the integer ones. It is passed as a double, so a float parameter is
+     * narrowed on the way into its slot.
+     */
+    if (ty_is_float(sym->ty)) {
+        if (size == 4) {
+            fprintf(output, "    cvtsd2ss %%xmm%d, %%xmm%d\n",
+                sym->float_index, sym->float_index);
+        }
+        fprintf(output, "    mov%s   %%xmm%d, %d(%%rbp)\n",
+            fp_suffix(sym->ty), sym->float_index, sym->offset);
+        return;
+    }
     if (size == 8) {
-        fprintf(output, "    movq    %s, %d(%%rbp)\n", arg_reg64[i], sym->offset);
+        fprintf(output, "    movq    %s, %d(%%rbp)\n", arg_reg64[sym->integer_index],
+            sym->offset);
     } else {
         /*
          * Narrower arguments arrive promoted to 32 bits, and the slot is at
          * least a word wide, so one 4-byte store is correct for all of them.
          */
-        fprintf(output, "    movl    %s, %d(%%rbp)\n", arg_reg32[i], sym->offset);
+        fprintf(output, "    movl    %s, %d(%%rbp)\n", arg_reg32[sym->integer_index],
+            sym->offset);
     }
 }
 
@@ -1180,8 +1394,74 @@ static void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *
     }
 }
 
+/*
+ * Floating arithmetic. Both operands are evaluated into %xmm0 in turn, the
+ * first parked on the stack, so the shape matches the integer stack machine.
+ * The left operand ends up in %xmm1 and the right in %xmm0, which is the wrong
+ * way round for the non-commutative operators -- hence the swap.
+ */
+static int generate_float_binop(struct cg_ctx *ctx, struct ast_node *node,
+    FILE *output)
+{
+    struct Type *ty = ty_is_float(node->left->ty) ? node->left->ty : node->right->ty;
+    const char *suffix = fp_suffix(ty);
+    const char *op = NULL;
+    const char *set = NULL;
+    int is_comparison = 0;
+
+    switch (node->type) {
+        case AST_ADD: op = "add"; break;
+        case AST_SUB: op = "sub"; break;
+        case AST_MUL: op = "mul"; break;
+        case AST_DIV: op = "div"; break;
+        case AST_EQUAL:         set = "sete";  is_comparison = 1; break;
+        case AST_NOT_EQUAL:     set = "setne"; is_comparison = 1; break;
+        case AST_LESS:          set = "seta";  is_comparison = 1; break;
+        case AST_LESS_EQUAL:    set = "setae"; is_comparison = 1; break;
+        case AST_GREATER:       set = "seta";  is_comparison = 1; break;
+        case AST_GREATER_EQUAL: set = "setae"; is_comparison = 1; break;
+        default: return 0;
+    }
+
+    generate_exp(ctx, node->left, output);
+    emit_fp_push(ty, output);
+    generate_exp(ctx, node->right, output);
+    emit_fp_pop(ty, "xmm1", output);
+
+    if (is_comparison) {
+        /*
+         * ucomis compares its second operand against its first and sets the
+         * unsigned flags, so ordering the operands turns every relation into an
+         * above or above-or-equal test.
+         */
+        if (node->type == AST_GREATER || node->type == AST_GREATER_EQUAL) {
+            fprintf(output, "    ucomi%s %%xmm0, %%xmm1\n", suffix);
+        } else {
+            fprintf(output, "    ucomi%s %%xmm1, %%xmm0\n", suffix);
+        }
+        fprintf(output, "    movl    $0, %%eax\n");
+        fprintf(output, "    %s   %%al\n", set);
+        return 1;
+    }
+
+    if (node->type == AST_SUB || node->type == AST_DIV) {
+        fprintf(output, "    %s%s   %%xmm0, %%xmm1\n", op, suffix);
+        fprintf(output, "    mov%s   %%xmm1, %%xmm0\n", suffix);
+    } else {
+        fprintf(output, "    %s%s   %%xmm1, %%xmm0\n", op, suffix);
+    }
+    return 1;
+}
+
 void generate_binop(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
+    /* Either operand being floating point makes the whole operation so. */
+    if (ty_is_float(node->left->ty) || ty_is_float(node->right->ty)) {
+        if (generate_float_binop(ctx, node, output)) {
+            return;
+        }
+    }
+
     int is_unsigned = is_unsigned_type(node->left->data_type);
     int left_is_pointer = node->left->pointer_depth > 0 || node->left->array_length > 0;
     int right_is_pointer = node->right->pointer_depth > 0 || node->right->array_length > 0;
@@ -1324,6 +1604,14 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
         case AST_INTLIT:
             fprintf(output, "    movl    $%s, %%eax\n", node->value);
             break;
+        case AST_FLOATLIT: {
+            int is_float = node->ty && node->ty->size == 4;
+            int label = intern_fp_constant(node->value, is_float);
+
+            fprintf(output, "    mov%s   .LF%d(%%rip), %%xmm0\n",
+                fp_suffix(node->ty), label);
+            break;
+        }
         case AST_STRINGLIT:
             fprintf(output, "    leaq    .LC%d(%%rip), %%rax\n", node->string_label);
             break;
@@ -1340,6 +1628,7 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
              */
             int padding = (stack_args % 2) ? 8 : 0;
             int registers = arg_count < 6 ? arg_count : 6;
+            int float_registers = 0;
             int i;
 
             if (padding) {
@@ -1351,8 +1640,27 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
              * and the register arguments pop off in order.
              */
             generate_call_args(ctx, node->left, output);
-            for (i = 0; i < registers; i++) {
-                fprintf(output, "    popq    %s\n", arg_reg64[i]);
+            /*
+             * System V has separate register sequences for integer and
+             * floating arguments, so each is assigned from its own list in
+             * argument order.
+             */
+            {
+                struct ast_node *arg = node->left;
+                int integer_index = 0;
+                int float_index = 0;
+
+                for (i = 0; i < registers && arg; i++, arg = arg->right) {
+                    struct ast_node *value = arg->type == AST_ARG_LIST ? arg->left : arg;
+
+                    if (ty_is_float(value->ty)) {
+                        fprintf(output, "    movsd   (%%rsp), %%xmm%d\n", float_index++);
+                        fprintf(output, "    addq    $8, %%rsp\n");
+                    } else {
+                        fprintf(output, "    popq    %s\n", arg_reg64[integer_index++]);
+                    }
+                }
+                float_registers = float_index;
             }
 
             /*
@@ -1366,7 +1674,7 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
                 fprintf(output, "    call    *%%r10\n");
             } else {
                 /* A variadic callee reads %al for the vector register count. */
-                fprintf(output, "    movl    $0, %%eax\n");
+                fprintf(output, "    movl    $%d, %%eax\n", float_registers);
                 fprintf(output, "    call    %s\n", node->value);
             }
 
@@ -1531,7 +1839,11 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
             break;
         case AST_CAST:
             generate_exp(ctx, node->left, output);
-            generate_cast(node->value, output);
+            if (ty_is_float(node->ty) || ty_is_float(node->left->ty)) {
+                generate_cast_between(node->left->ty, node->ty, output);
+            } else {
+                generate_cast(node->value, output);
+            }
             break;
         case AST_NEGATION:
             generate_exp(ctx, node->left, output);
@@ -1583,10 +1895,22 @@ static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *o
     if (node->left->ty && node->left->ty->kind == TY_STRUCT) {
         generate_lvalue_address(ctx, node->left, output);
         fprintf(output, "    movq    (%%rax), %%rax\n");
+        fprintf(output, "    pushq   %%rax\n");
+    } else if (ty_is_float(node->left->ty)) {
+        /*
+         * A floating argument is always passed as a double: that is what the
+         * ABI requires for a variadic call, and it is harmless otherwise.
+         */
+        generate_exp(ctx, node->left, output);
+        if (node->left->ty->size == 4) {
+            fprintf(output, "    cvtss2sd %%xmm0, %%xmm0\n");
+        }
+        fprintf(output, "    subq    $8, %%rsp\n");
+        fprintf(output, "    movsd   %%xmm0, (%%rsp)\n");
     } else {
         generate_exp(ctx, node->left, output);
+        fprintf(output, "    pushq   %%rax\n");
     }
-    fprintf(output, "    pushq   %%rax\n");
 
     return count + 1;
 }
@@ -1611,6 +1935,8 @@ void write_assembly_to_file(const char *filename, struct ast_node *ast)
     memset(ctx, 0, sizeof(*ctx));
 
     generate_program(ctx, ast, out_file);
+    generate_fp_constants(out_file);
+    free_fp_constants();
     generate_stack_note(out_file);
     fclose(out_file);
 

@@ -4,7 +4,7 @@
 #include <string.h>
 #include "cli.h"
 
-#define DONKEY_VERSION "0.7.0"
+#define DONKEY_VERSION "0.9.0"
 
 enum {
     OPT_DUMP_TOKENS = 1000,

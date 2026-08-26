@@ -320,6 +320,14 @@ static const char* parse_type_name(struct token *tokens, int *token_index)
         (*token_index)++;
         return "void";
     }
+    if (base_type == T_FLOAT && !has_sign) {
+        (*token_index)++;
+        return "float";
+    }
+    if (base_type == T_DOUBLE && !has_sign) {
+        (*token_index)++;
+        return "double";
+    }
     if (base_type == T_CHAR || base_type == T_SHORT || base_type == T_INT || base_type == T_LONG) {
         (*token_index)++;
     } else if (has_sign) {
@@ -349,6 +357,8 @@ static CType type_from_name(const char *name)
 {
     if (!name) return TYPE_INT;
     if (strcmp(name, "void") == 0) return TYPE_VOID;
+    if (strcmp(name, "float") == 0) return TYPE_FLOAT;
+    if (strcmp(name, "double") == 0) return TYPE_DOUBLE;
     if (strcmp(name, "char") == 0) return TYPE_CHAR;
     if (strcmp(name, "uchar") == 0) return TYPE_UCHAR;
     if (strcmp(name, "short") == 0) return TYPE_SHORT;
@@ -563,7 +573,8 @@ static int is_type_start(TokenType type)
     return type == T_CHAR || type == T_SHORT || type == T_INT ||
         type == T_LONG || type == T_SIGNED || type == T_UNSIGNED ||
         type == T_STRUCT || type == T_UNION || type == T_ENUM ||
-        type == T_VOID || is_declaration_prefix(type);
+        type == T_VOID || type == T_FLOAT || type == T_DOUBLE ||
+        is_declaration_prefix(type);
 }
 
 static const char *parse_struct_name(struct token *tokens, int *token_index)
@@ -1617,6 +1628,16 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
         (*token_index)++;
         return create_ast_node_at(AST_DEREFERENCE, NULL, parse_factor(tokens, token_index), NULL,
             operator_location);
+    }
+
+    if (tok->type == T_FLOATLIT) {
+        struct ast_node *literal = create_ast_node_at(AST_FLOATLIT, tok->value,
+            NULL, NULL, tok->location);
+
+        /* An f suffix makes it a float; otherwise a floating literal is double. */
+        literal->data_type = strchr(tok->value, 'f') ? TYPE_FLOAT : TYPE_DOUBLE;
+        (*token_index)++;
+        return literal;
     }
 
     if (tok->type == T_INTLIT || tok->type == T_CHARLIT) {

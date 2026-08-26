@@ -40,6 +40,8 @@ typedef enum {
     T_UNION,
     T_ENUM,
     T_VOID,
+    T_FLOAT,
+    T_DOUBLE,
     T_TYPEDEF,
     T_EXTERN,
     T_STATIC,
@@ -49,6 +51,7 @@ typedef enum {
     T_SIZEOF,
     T_IDENTIFIER,
     T_INTLIT,
+    T_FLOATLIT,
     T_CHARLIT,
     T_STRINGLIT,
     T_BITWISE_COMPLEMENT,
@@ -132,6 +135,7 @@ typedef enum {
     AST_ARRAY_SUBSCRIPT,
     AST_FIELD_ACCESS,
     AST_INTLIT,
+    AST_FLOATLIT,
     AST_STRINGLIT,
     AST_IDENTIFIER,
     AST_NEGATION,
@@ -173,7 +177,9 @@ typedef enum {
     TYPE_INT,
     TYPE_UINT,
     TYPE_LONG,
-    TYPE_ULONG
+    TYPE_ULONG,
+    TYPE_FLOAT,
+    TYPE_DOUBLE
 } CType;
 
 typedef struct {

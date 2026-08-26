@@ -40,6 +40,15 @@ struct Symbol {
      * entry; later ones already sit on the stack.
      */
     int param_index;
+
+    /*
+     * SYM_PARAM: which register a parameter arrived in. System V counts
+     * integer and floating arguments separately, so with the two interleaved
+     * neither index is the same as param_index -- `f(int, double, int)` puts
+     * its third argument in the second integer register.
+     */
+    int float_index;
+    int integer_index;
 };
 
 struct Symbol *sym_new(const char *name, SymbolKind kind, struct Type *ty);

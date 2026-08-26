@@ -16,6 +16,8 @@ static struct Type basic_int    = { TY_INT,   4, 4, 0, NULL, 0, NULL, NULL, 1 };
 static struct Type basic_uint   = { TY_INT,   4, 4, 1, NULL, 0, NULL, NULL, 1 };
 static struct Type basic_long   = { TY_LONG,  8, 8, 0, NULL, 0, NULL, NULL, 1 };
 static struct Type basic_ulong  = { TY_LONG,  8, 8, 1, NULL, 0, NULL, NULL, 1 };
+static struct Type basic_float  = { TY_FLOAT, 4, 4, 0, NULL, 0, NULL, NULL, 1 };
+static struct Type basic_double = { TY_DOUBLE, 8, 8, 0, NULL, 0, NULL, NULL, 1 };
 
 struct Type *ty_void   = &basic_void;
 struct Type *ty_char   = &basic_char;
@@ -26,6 +28,8 @@ struct Type *ty_int    = &basic_int;
 struct Type *ty_uint   = &basic_uint;
 struct Type *ty_long   = &basic_long;
 struct Type *ty_ulong  = &basic_ulong;
+struct Type *ty_float  = &basic_float;
+struct Type *ty_double = &basic_double;
 
 /* Pointer size and alignment for the x86-64 target. */
 #define POINTER_SIZE 8
@@ -185,6 +189,11 @@ struct Member *ty_find_member(struct Type *type, const char *name)
     return NULL;
 }
 
+int ty_is_float(struct Type *type)
+{
+    return type && (type->kind == TY_FLOAT || type->kind == TY_DOUBLE);
+}
+
 int ty_is_integer(struct Type *type)
 {
     if (!type) {
@@ -227,6 +236,8 @@ const char *ty_name(struct Type *type)
         case TY_SHORT:  return type->is_unsigned ? "ushort" : "short";
         case TY_INT:    return type->is_unsigned ? "uint" : "int";
         case TY_LONG:   return type->is_unsigned ? "ulong" : "long";
+        case TY_FLOAT:  return "float";
+        case TY_DOUBLE: return "double";
         case TY_STRUCT: return type->name ? type->name : "struct";
         case TY_FUNC:   return "function";
         default:        return "int";
@@ -284,6 +295,8 @@ struct Type *ty_from_name(const char *name)
     if (strcmp(name, "uint") == 0)   return ty_uint;
     if (strcmp(name, "long") == 0)   return ty_long;
     if (strcmp(name, "ulong") == 0)  return ty_ulong;
+    if (strcmp(name, "float") == 0)  return ty_float;
+    if (strcmp(name, "double") == 0) return ty_double;
     return ty_int;
 }
 

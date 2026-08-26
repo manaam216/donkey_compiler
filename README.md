@@ -448,8 +448,7 @@ This removes the `build/` directory.
 - Function-pointer declarators are recognised only in the form
   `TYPE (*name)(params)`. The general recursive declarator grammar, which would
   also give `int (*a)[10]`, is not implemented.
-- No `float` or `double`. The lexer does not read a decimal point, and there is
-  no floating-point code generation or SSE calling convention.
+- `long double` is not distinguished from `double`.
 - No compound literals or designated initialisers.
 - No `union`, and no nested struct definitions.
 - Global initializers must be constant expressions.

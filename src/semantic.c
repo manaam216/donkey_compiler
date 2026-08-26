@@ -84,6 +84,10 @@ struct sema_ctx {
     int frame_offset;
     int frame_max;
 
+    /* Registers used by the parameters of the function being analysed. */
+    int float_param_count;
+    int integer_param_count;
+
     const char *current_function;
     CType current_return_type;
     int current_return_pointer_depth;
@@ -122,6 +126,8 @@ static const char *semantic_type_name(CType type)
 {
     switch (type) {
         case TYPE_VOID: return "void";
+        case TYPE_FLOAT: return "float";
+        case TYPE_DOUBLE: return "double";
         case TYPE_CHAR: return "char";
         case TYPE_UCHAR: return "uchar";
         case TYPE_SHORT: return "short";
@@ -523,6 +529,13 @@ static void add_parameter(struct sema_ctx *ctx, struct ast_node *node, int index
 
         node->sym = sym_new(node->value, SYM_PARAM, resolved);
         node->sym->param_index = index;
+        node->sym->float_index = ctx->float_param_count;
+        node->sym->integer_index = ctx->integer_param_count;
+        if (ty_is_float(resolved)) {
+            ctx->float_param_count++;
+        } else {
+            ctx->integer_param_count++;
+        }
 
         if (index < 6) {
             /*
@@ -944,6 +957,8 @@ static void analyze_top_level(struct sema_ctx *ctx, struct ast_node *node)
         ctx->loop_depth = 0;
         ctx->frame_offset = 0;
         ctx->frame_max = 0;
+        ctx->float_param_count = 0;
+        ctx->integer_param_count = 0;
 
         for (param = node->left; param; param = param->right) {
             if (param->type == AST_PARAM_LIST) {
@@ -971,6 +986,13 @@ static CType integer_promotion(CType type)
 
 static CType usual_arithmetic_type(CType left, CType right)
 {
+    /*
+     * Floating point outranks every integer type, and double outranks float,
+     * so a mixed expression is done at the wider of the two.
+     */
+    if (left == TYPE_DOUBLE || right == TYPE_DOUBLE) return TYPE_DOUBLE;
+    if (left == TYPE_FLOAT || right == TYPE_FLOAT) return TYPE_FLOAT;
+
     left = integer_promotion(left);
     right = integer_promotion(right);
     if (left == right) return left;
@@ -997,6 +1019,12 @@ static void insert_conversion(struct ast_node **slot, CType target)
     }
     cast = create_ast_node(AST_CAST, (char *)semantic_type_name(target), *slot, NULL);
     cast->data_type = target;
+    /*
+     * Resolve the inserted cast's type here. It is created after its operand
+     * has been checked, so nothing else will visit it -- and a floating
+     * conversion needs the type, not just the name, to pick its instruction.
+     */
+    cast->ty = ty_from_name(semantic_type_name(target));
     *slot = cast;
 }
 
@@ -1092,6 +1120,9 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
     switch (node->type) {
         case AST_INTLIT:
             return node->data_type = TYPE_INT;
+        case AST_FLOATLIT:
+            /* The parser already decided float or double from the suffix. */
+            return node->data_type;
         case AST_STRINGLIT:
             node->pointer_depth = 1;
             return node->data_type = TYPE_CHAR;
@@ -1539,6 +1570,8 @@ static void check_top_level_types(struct sema_ctx *ctx, struct ast_node *node)
         ctx->local_count = 0;
         ctx->scope_depth = 1;
         ctx->frame_offset = 0;
+        ctx->float_param_count = 0;
+        ctx->integer_param_count = 0;
         {
             int param_index = 0;
             for (param = node->left; param; param = param->right)

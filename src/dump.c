@@ -50,6 +50,8 @@ static const char *token_kind_name(int kind)
         case T_UNION: return "union";
         case T_ENUM: return "enum";
         case T_VOID: return "void";
+        case T_FLOAT: return "float";
+        case T_DOUBLE: return "double";
         case T_TYPEDEF: return "typedef";
         case T_EXTERN: return "extern";
         case T_STATIC: return "static";
@@ -59,6 +61,7 @@ static const char *token_kind_name(int kind)
         case T_SIZEOF: return "sizeof";
         case T_IDENTIFIER: return "identifier";
         case T_INTLIT: return "intlit";
+        case T_FLOATLIT: return "floatlit";
         case T_CHARLIT: return "charlit";
         case T_STRINGLIT: return "stringlit";
         case T_BITWISE_COMPLEMENT: return "bitwise_complement";
@@ -72,6 +75,7 @@ static const char *token_kind_name(int kind)
         case T_SLASH_ASSIGN: return "slash_assign";
         case T_MINUS: return "minus";
         case T_MINUS_MINUS: return "minus_minus";
+        case T_ARROW: return "arrow";
         case T_MINUS_ASSIGN: return "minus_assign";
         case T_PERCENT: return "percent";
         case T_PERCENT_ASSIGN: return "percent_assign";
@@ -145,6 +149,7 @@ static const char *ast_kind_name(int kind)
         case AST_ARRAY_SUBSCRIPT: return "array_subscript";
         case AST_FIELD_ACCESS: return "field_access";
         case AST_INTLIT: return "intlit";
+        case AST_FLOATLIT: return "floatlit";
         case AST_STRINGLIT: return "stringlit";
         case AST_IDENTIFIER: return "identifier";
         case AST_NEGATION: return "negation";
