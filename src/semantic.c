@@ -32,6 +32,7 @@ struct local_symbol {
     int array_length;
     int array_dims[DONKEY_MAX_ARRAY_DIMS];
     int array_dim_count;
+    int is_function_pointer;
     const char *struct_name;
     int depth;
     struct Symbol *sym;
@@ -212,6 +213,11 @@ static struct Type *resolve_type(struct sema_ctx *ctx, struct ast_node *node)
 {
     struct Type *type = base_type_for(ctx, node);
     int i;
+
+    /* A function pointer points at a function returning the base type. */
+    if (node->is_function_pointer) {
+        return ty_pointer_to(ty_func(type));
+    }
 
     for (i = 0; i < node->pointer_depth; i++) {
         type = ty_pointer_to(type);
@@ -499,6 +505,7 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
     memcpy(ctx->locals[ctx->local_count].array_dims, node->array_dims,
         sizeof(node->array_dims));
     ctx->locals[ctx->local_count].array_dim_count = node->array_dim_count;
+    ctx->locals[ctx->local_count].is_function_pointer = node->is_function_pointer;
     ctx->locals[ctx->local_count].struct_name = node->struct_name;
     ctx->locals[ctx->local_count].depth = ctx->scope_depth;
     ctx->local_count++;
@@ -593,6 +600,14 @@ static void analyze_expression(struct sema_ctx *ctx, struct ast_node *node)
             return;
         case AST_IDENTIFIER:
             symbol = find_global(ctx, node->value);
+            /*
+             * A function's name, used anywhere but in a call, is its address.
+             * That is what makes `f = add;` legal.
+             */
+            if (find_local(ctx, node->value) < 0 && symbol >= 0 &&
+                ctx->globals[symbol].is_function) {
+                return;
+            }
             if (find_local(ctx, node->value) < 0 &&
                 (symbol < 0 || ctx->globals[symbol].is_function)) {
                 semantic_error_at(ctx, node, "use of undeclared variable '%s'", node->value);
@@ -600,6 +615,24 @@ static void analyze_expression(struct sema_ctx *ctx, struct ast_node *node)
             return;
         case AST_CALL:
             symbol = find_global(ctx, node->value);
+            {
+                int local_index = find_local(ctx, node->value);
+
+                /*
+                 * A local holding a function pointer is callable. Its
+                 * arguments are not checked against a signature: the pointer's
+                 * parameter list is parsed for syntax only.
+                 */
+                if (local_index >= 0 && ctx->locals[local_index].is_function_pointer) {
+                    struct ast_node *argument;
+
+                    for (argument = node->left; argument; argument = argument->right) {
+                        analyze_expression(ctx,
+                            argument->type == AST_ARG_LIST ? argument->left : argument);
+                    }
+                    return;
+                }
+            }
             if (find_local(ctx, node->value) >= 0) {
                 semantic_error_at(ctx, node, "called object '%s' is not a function", node->value);
             } else if (symbol < 0) {
@@ -1095,8 +1128,15 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
                 memcpy(node->array_dims, ctx->locals[local].array_dims,
                     sizeof(node->array_dims));
                 node->array_dim_count = ctx->locals[local].array_dim_count;
+                node->is_function_pointer = ctx->locals[local].is_function_pointer;
                 node->struct_name = ctx->locals[local].struct_name ? strdup(ctx->locals[local].struct_name) : NULL;
                 return node->data_type;
+            }
+            if (global >= 0 && ctx->globals[global].is_function) {
+                node->sym = ctx->globals[global].sym;
+                node->is_function_pointer = 1;
+                node->pointer_depth = 1;
+                return node->data_type = ctx->globals[global].type;
             }
             if (global >= 0 && !ctx->globals[global].is_function) {
                 node->sym = ctx->globals[global].sym;
@@ -1129,8 +1169,26 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
             node->array_length = 0;
             return node->data_type;
         }
-        case AST_CALL:
-            global = find_global(ctx, node->value);
+        case AST_CALL: {
+            int callee_local = find_local(ctx, node->value);
+
+            /*
+             * A call through a local function pointer takes the pointer's
+             * return type; there is no stored signature to check against.
+             */
+            if (callee_local >= 0 && ctx->locals[callee_local].is_function_pointer) {
+                struct ast_node *arg;
+
+                for (arg = node->left; arg; arg = arg->right) {
+                    check_expression_type(ctx, &arg->left);
+                }
+                node->is_indirect_call = 1;
+                node->sym = ctx->locals[callee_local].sym;
+                return node->data_type = ctx->locals[callee_local].type;
+            }
+        }
+        /* fall through to the ordinary, named call */
+        global = find_global(ctx, node->value);
             argument_index = 0;
             for (argument = node->left; argument; argument = argument->right) {
                 check_expression_type(ctx, &argument->left);
@@ -1140,10 +1198,20 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
                  * stack. That is not implemented, so it is refused rather than
                  * quietly passing the wrong thing; a pointer to it works.
                  */
+                /*
+                 * System V classifies a struct by size. With no floating-point
+                 * types there is only the INTEGER class, so one of eight bytes
+                 * or fewer travels in a single register -- which is exactly one
+                 * argument slot, the shape the call sequence already has.
+                 * Anything larger needs two registers or a stack copy, so it is
+                 * refused rather than passed wrongly.
+                 */
                 if (argument->left && argument->left->ty &&
-                    argument->left->ty->kind == TY_STRUCT) {
+                    argument->left->ty->kind == TY_STRUCT &&
+                    argument->left->ty->size > 8) {
                     semantic_error_at(ctx, argument->left,
-                        "cannot pass a struct by value yet; pass a pointer to it");
+                        "cannot pass a struct larger than 8 bytes by value yet; "
+                        "pass a pointer to it");
                 }
                 if (global >= 0 && ctx->globals[global].is_function &&
                     argument_index < ctx->globals[global].parameter_count) {

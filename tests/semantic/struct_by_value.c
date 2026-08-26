@@ -1,15 +1,19 @@
-/* Passing a struct by value is refused rather than quietly miscompiled. */
-struct P { int x; int y; };
+/*
+ * A struct of eight bytes or fewer is passed in one register and works. A
+ * larger one needs two registers or a stack copy, which is not implemented, so
+ * it is refused rather than quietly miscompiled.
+ */
+struct Large { int a; int b; int c; int d; };
 
-int take(struct P p)
+int take(struct Large s)
 {
-    return p.x + p.y;
+    return s.a;
 }
 
 int main()
 {
-    struct P a;
-    a.x = 1;
-    a.y = 2;
-    return take(a);
+    struct Large value;
+
+    value.a = 1;
+    return take(value);
 }

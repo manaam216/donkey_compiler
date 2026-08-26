@@ -466,6 +466,51 @@ static int is_repeatable(const struct ast_node *node)
     return is_repeatable(node->left) && is_repeatable(node->right);
 }
 
+/*
+ * A function-pointer declarator, TYPE (*name)(params).
+ *
+ * Only this one nesting is recognised, not the general recursive declarator
+ * grammar that would also give `int (*a)[10]`. It is the form that matters in
+ * practice, and treating it specially keeps the rest of the parser as it is.
+ *
+ * Returns the name on success with *token_index past the parameter list, or
+ * NULL with the index untouched.
+ */
+static char *parse_function_pointer_declarator(struct token *tokens,
+    int *token_index)
+{
+    int look = *token_index;
+    char *name;
+
+    if (tokens[look].type != T_OPENPAREN || tokens[look + 1].type != T_STAR ||
+        tokens[look + 2].type != T_IDENTIFIER ||
+        tokens[look + 3].type != T_CLOSEPAREN ||
+        tokens[look + 4].type != T_OPENPAREN) {
+        return NULL;
+    }
+
+    name = tokens[look + 2].value;
+    look += 5;
+
+    /*
+     * The parameter list is parsed for its syntax only. Calls through the
+     * pointer are checked against the arguments given, not against a stored
+     * signature, so the types are not recorded.
+     */
+    {
+        int depth = 1;
+
+        while (tokens[look].type != T_EOF && depth > 0) {
+            if (tokens[look].type == T_OPENPAREN) depth++;
+            else if (tokens[look].type == T_CLOSEPAREN) depth--;
+            look++;
+        }
+    }
+
+    *token_index = look;
+    return name;
+}
+
 static struct ast_node* parse_initializer(struct token *tokens, int *token_index);
 static struct ast_node* parse_do_while_statement(struct token *tokens, int *token_index);
 static struct ast_node* parse_switch_statement(struct token *tokens, int *token_index);
@@ -871,6 +916,29 @@ struct ast_node* parse_param_list(struct token *tokens, int *token_index)
     }
 
     skip_declaration_prefixes(tokens, token_index);
+
+    /* A parameter may itself be a function pointer: int (*op)(int, int). */
+    {
+        char *function_pointer_name =
+            parse_function_pointer_declarator(tokens, token_index);
+
+        if (function_pointer_name) {
+            struct ast_node *fp = create_ast_node_at(AST_IDENTIFIER,
+                function_pointer_name, NULL, NULL, tokens[*token_index].location);
+            struct ast_node *rest_of_list = NULL;
+
+            fp->data_type = type_from_name(type_name);
+            fp->pointer_depth = 1;
+            fp->is_function_pointer = 1;
+
+            if (tokens[*token_index].type == T_COMMA) {
+                (*token_index)++;
+                rest_of_list = parse_param_list(tokens, token_index);
+            }
+            return create_ast_node(AST_PARAM_LIST, NULL, fp, rest_of_list);
+        }
+    }
+
     pointer_depth = parse_pointer_stars(tokens, token_index);
     skip_declaration_prefixes(tokens, token_index);
 
@@ -1241,15 +1309,49 @@ struct ast_node* parse_declaration(struct token *tokens, int *token_index)
     }
 
     for (;;) {
-        int pointer_depth = parse_pointer_stars(tokens, token_index);
-        struct token *tok = &tokens[*token_index];
+        int pointer_depth;
+        struct token *tok;
         char *name;
+        char *function_pointer_name;
         SourceLocation declaration_location;
         int array_length;
         int dims[DONKEY_MAX_ARRAY_DIMS];
         int dim_count;
         struct ast_node *initializer = NULL;
         struct ast_node *declaration;
+
+        /* TYPE (*name)(params) declares a pointer to a function. */
+        function_pointer_name = parse_function_pointer_declarator(tokens, token_index);
+        if (function_pointer_name) {
+            struct ast_node *declaration = create_ast_node_at(AST_DECL,
+                function_pointer_name, NULL, NULL, tokens[*token_index].location);
+
+            declaration->data_type = type_from_name(type_name);
+            declaration->pointer_depth = 1;
+            declaration->is_function_pointer = 1;
+
+            if (tokens[*token_index].type == T_ASSIGN) {
+                (*token_index)++;
+                declaration->left = parse_initializer(tokens, token_index);
+            }
+
+            if (first == NULL) {
+                first = declaration;
+                tail = &first;
+            } else {
+                *tail = create_ast_node(AST_STATEMENT_LIST, NULL, *tail, declaration);
+                tail = &(*tail)->right;
+            }
+
+            if (tokens[*token_index].type != T_COMMA) {
+                break;
+            }
+            (*token_index)++;
+            continue;
+        }
+
+        pointer_depth = parse_pointer_stars(tokens, token_index);
+        tok = &tokens[*token_index];
 
         if (tok->type != T_IDENTIFIER) {
             parse_error_at(tok, "expected identifier in declaration, found '%s'",

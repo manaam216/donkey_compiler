@@ -25,7 +25,8 @@ typedef enum {
     TY_LONG,
     TY_PTR,
     TY_ARRAY,
-    TY_STRUCT
+    TY_STRUCT,
+    TY_FUNC
 } TypeKind;
 
 struct Member {
@@ -63,6 +64,9 @@ extern struct Type *ty_ulong;
 struct Type *ty_pointer_to(struct Type *base);
 struct Type *ty_array_of(struct Type *base, int length);
 struct Type *ty_struct(const char *name);
+
+/* A function type; a function pointer is a pointer to one of these. */
+struct Type *ty_func(struct Type *return_type);
 
 /*
  * Assign offsets to a struct's members, inserting padding so each lands on its

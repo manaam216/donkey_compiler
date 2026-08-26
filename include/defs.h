@@ -208,6 +208,16 @@ struct ast_node {
      */
     int array_dims[DONKEY_MAX_ARRAY_DIMS];
     int array_dim_count;
+
+    /*
+     * Set on a declarator written as TYPE (*name)(params): the name is a
+     * pointer to a function returning TYPE, not a plain pointer. Calls through
+     * it are indirect.
+     */
+    int is_function_pointer;
+
+    /* AST_CALL through a function pointer, so the call is indirect. */
+    int is_indirect_call;
     char *struct_name;
 
     /*

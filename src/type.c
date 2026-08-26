@@ -94,6 +94,20 @@ struct Type *ty_struct(const char *name)
     return type;
 }
 
+struct Type *ty_func(struct Type *return_type)
+{
+    struct Type *type = alloc_type(TY_FUNC);
+
+    /*
+     * A function has no size of its own; what gets stored is a pointer to it.
+     * Giving it a size of one keeps arithmetic on such a pointer harmless.
+     */
+    type->size = 1;
+    type->align = 1;
+    type->base = return_type;
+    return type;
+}
+
 void ty_add_member(struct Type *type, const char *name, struct Type *member_type)
 {
     struct Member *member;
@@ -214,6 +228,7 @@ const char *ty_name(struct Type *type)
         case TY_INT:    return type->is_unsigned ? "uint" : "int";
         case TY_LONG:   return type->is_unsigned ? "ulong" : "long";
         case TY_STRUCT: return type->name ? type->name : "struct";
+        case TY_FUNC:   return "function";
         default:        return "int";
     }
 }
@@ -245,6 +260,13 @@ void ty_format(struct Type *type, char *buffer, size_t size)
         case TY_STRUCT:
             snprintf(buffer, size, "struct %s", type->name ? type->name : "?");
             break;
+        case TY_FUNC: {
+            char inner[96];
+
+            ty_format(type->base, inner, sizeof(inner));
+            snprintf(buffer, size, "%s()", inner);
+            break;
+        }
         default:
             snprintf(buffer, size, "%s", ty_name(type));
             break;

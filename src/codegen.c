@@ -511,6 +511,12 @@ static void generate_identifier_load(struct ast_node *node, FILE *output)
     struct Symbol *sym = node->sym;
     int is_array = sym->ty && sym->ty->kind == TY_ARRAY;
 
+    /* A function's name is its address; there is nothing to load from. */
+    if (sym->kind == SYM_FUNCTION) {
+        fprintf(output, "    leaq    %s(%%rip), %%rax\n", sym->name);
+        return;
+    }
+
     if (is_frame_symbol(sym)) {
         /* An array's value is its address; anything else is loaded. */
         if (is_array) {
@@ -1349,9 +1355,20 @@ static void generate_exp(struct cg_ctx *ctx, struct ast_node *node, FILE *output
                 fprintf(output, "    popq    %s\n", arg_reg64[i]);
             }
 
-            /* A variadic callee reads %al for the count of vector registers. */
-            fprintf(output, "    movl    $0, %%eax\n");
-            fprintf(output, "    call    %s\n", node->value);
+            /*
+             * A call through a function pointer loads the target and calls
+             * through the register. The pointer is loaded after the arguments
+             * are in place, so evaluating it cannot disturb them.
+             */
+            if (node->is_indirect_call) {
+                fprintf(output, "    movq    %d(%%rbp), %%r10\n", node->sym->offset);
+                fprintf(output, "    movl    $0, %%eax\n");
+                fprintf(output, "    call    *%%r10\n");
+            } else {
+                /* A variadic callee reads %al for the vector register count. */
+                fprintf(output, "    movl    $0, %%eax\n");
+                fprintf(output, "    call    %s\n", node->value);
+            }
 
             if (stack_args > 0 || padding) {
                 fprintf(output, "    addq    $%d, %%rsp\n",
@@ -1558,7 +1575,17 @@ static int generate_call_args(struct cg_ctx *ctx, struct ast_node *node, FILE *o
     }
 
     int count = generate_call_args(ctx, node->right, output);
-    generate_exp(ctx, node->left, output);
+
+    /*
+     * A struct of eight bytes or fewer is passed as one register-sized value,
+     * so load its contents rather than evaluating it as an address.
+     */
+    if (node->left->ty && node->left->ty->kind == TY_STRUCT) {
+        generate_lvalue_address(ctx, node->left, output);
+        fprintf(output, "    movq    (%%rax), %%rax\n");
+    } else {
+        generate_exp(ctx, node->left, output);
+    }
     fprintf(output, "    pushq   %%rax\n");
 
     return count + 1;

@@ -441,12 +441,13 @@ This removes the `build/` directory.
 
 ## Current Limitations
 
-- Structs cannot be passed to a function by value or returned from one. Both
-  need the System V rules for splitting a struct across registers; passing one
-  is refused rather than quietly miscompiled. Assigning a whole struct, and
-  passing a pointer to one, both work.
-- No function pointers: `int (*f)(int, int)` does not parse yet. That needs
-  recursive declarators, which also cover `int (*a)[10]`.
+- A struct larger than eight bytes cannot be passed by value, and no struct
+  can be returned by value. Both need System V's two-register and stack-copy
+  rules; oversized ones are refused rather than quietly miscompiled. Assigning
+  a whole struct, and passing a pointer to one, both work.
+- Function-pointer declarators are recognised only in the form
+  `TYPE (*name)(params)`. The general recursive declarator grammar, which would
+  also give `int (*a)[10]`, is not implemented.
 - No `float` or `double`. The lexer does not read a decimal point, and there is
   no floating-point code generation or SSE calling convention.
 - No compound literals or designated initialisers.
