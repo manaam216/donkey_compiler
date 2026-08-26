@@ -224,6 +224,8 @@ void lex_text(const char *text, size_t length, const char *source_path,
         } else if (c == '-') {
             if ((c = fgetc(infile)) == '-') {
                 add_token(tokens, token_count, T_MINUS_MINUS, "--");
+            } else if (c == '>') {
+                add_token(tokens, token_count, T_ARROW, "->");
             } else if (c == '=') {
                 add_token(tokens, token_count, T_MINUS_ASSIGN, "-=");
             } else {
@@ -372,6 +374,10 @@ void lex_text(const char *text, size_t length, const char *source_path,
                 add_token(tokens, token_count, T_INT, buffer);
             } else if (strcmp(buffer, "long") == 0) {
                 add_token(tokens, token_count, T_LONG, buffer);
+            } else if (strcmp(buffer, "float") == 0) {
+                add_token(tokens, token_count, T_FLOAT, buffer);
+            } else if (strcmp(buffer, "double") == 0) {
+                add_token(tokens, token_count, T_DOUBLE, buffer);
             } else if (strcmp(buffer, "void") == 0) {
                 add_token(tokens, token_count, T_VOID, buffer);
             } else if (strcmp(buffer, "union") == 0) {
@@ -400,6 +406,16 @@ void lex_text(const char *text, size_t length, const char *source_path,
                 add_token(tokens, token_count, T_ELSE, buffer);
             } else if (strcmp(buffer, "while") == 0) {
                 add_token(tokens, token_count, T_WHILE, buffer);
+            } else if (strcmp(buffer, "do") == 0) {
+                add_token(tokens, token_count, T_DO, buffer);
+            } else if (strcmp(buffer, "switch") == 0) {
+                add_token(tokens, token_count, T_SWITCH, buffer);
+            } else if (strcmp(buffer, "case") == 0) {
+                add_token(tokens, token_count, T_CASE, buffer);
+            } else if (strcmp(buffer, "default") == 0) {
+                add_token(tokens, token_count, T_DEFAULT, buffer);
+            } else if (strcmp(buffer, "goto") == 0) {
+                add_token(tokens, token_count, T_GOTO, buffer);
             } else if (strcmp(buffer, "for") == 0) {
                 add_token(tokens, token_count, T_FOR, buffer);
             } else if (strcmp(buffer, "break") == 0) {
@@ -415,14 +431,63 @@ void lex_text(const char *text, size_t length, const char *source_path,
             }
             buffer_index = 0;
         } else if (isdigit(c)) {
+            /*
+             * A numeral is floating-point if it has a decimal point or an
+             * exponent. Both have to be scanned before the kind is known,
+             * since 1 and 1.5 and 1e3 all start the same way.
+             */
+            int is_float = 0;
+
             buffer[buffer_index++] = c;
             while (isdigit(c = fgetc(infile))) {
                 buffer[buffer_index++] = c;
             }
+
+            if (c == '.') {
+                is_float = 1;
+                buffer[buffer_index++] = c;
+                while (isdigit(c = fgetc(infile))) {
+                    buffer[buffer_index++] = c;
+                }
+            }
+
+            if (c == 'e' || c == 'E') {
+                int exponent = fgetc(infile);
+                int sign = 0;
+
+                if (exponent == '+' || exponent == '-') {
+                    sign = exponent;
+                    exponent = fgetc(infile);
+                }
+                if (isdigit(exponent)) {
+                    is_float = 1;
+                    buffer[buffer_index++] = c;
+                    if (sign) {
+                        buffer[buffer_index++] = (char)sign;
+                    }
+                    buffer[buffer_index++] = (char)exponent;
+                    while (isdigit(c = fgetc(infile))) {
+                        buffer[buffer_index++] = c;
+                    }
+                } else {
+                    /* Not an exponent after all; hand back what was read. */
+                    ungetc(exponent, infile);
+                    if (sign) {
+                        ungetc(sign, infile);
+                    }
+                }
+            }
+
+            /* An f suffix makes it a float rather than a double. */
+            if (is_float && (c == 'f' || c == 'F')) {
+                buffer[buffer_index++] = 'f';
+                c = fgetc(infile);
+            }
+
             ungetc(c, infile);
             buffer[buffer_index] = '\0';
 
-            add_token(tokens, token_count, T_INTLIT, buffer);
+            add_token(tokens, token_count, is_float ? T_FLOATLIT : T_INTLIT, buffer);
             buffer_index = 0;
         } else {
             lex_error_at(token_line, token_column, "invalid character '%c'", c);

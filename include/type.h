@@ -23,9 +23,12 @@ typedef enum {
     TY_SHORT,
     TY_INT,
     TY_LONG,
+    TY_FLOAT,
+    TY_DOUBLE,
     TY_PTR,
     TY_ARRAY,
-    TY_STRUCT
+    TY_STRUCT,
+    TY_FUNC
 } TypeKind;
 
 struct Member {
@@ -59,10 +62,15 @@ extern struct Type *ty_int;
 extern struct Type *ty_uint;
 extern struct Type *ty_long;
 extern struct Type *ty_ulong;
+extern struct Type *ty_float;
+extern struct Type *ty_double;
 
 struct Type *ty_pointer_to(struct Type *base);
 struct Type *ty_array_of(struct Type *base, int length);
 struct Type *ty_struct(const char *name);
+
+/* A function type; a function pointer is a pointer to one of these. */
+struct Type *ty_func(struct Type *return_type);
 
 /*
  * Assign offsets to a struct's members, inserting padding so each lands on its
@@ -73,6 +81,9 @@ void ty_add_member(struct Type *type, const char *name, struct Type *member_type
 struct Member *ty_find_member(struct Type *type, const char *name);
 
 int ty_is_integer(struct Type *type);
+
+/* float or double: values that live in an SSE register, not %rax. */
+int ty_is_float(struct Type *type);
 int ty_is_pointer_like(struct Type *type);   /* pointer or array */
 
 /*

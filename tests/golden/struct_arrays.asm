@@ -20,7 +20,7 @@ main:
     imulq   $8, %rax
     popq    %rdx
     addq    %rdx, %rax
-    addq    $4, %rax
+    addq    $0, %rax
     popq    %rdx
     movl    %edx, (%rax)
     movl    %edx, %eax
@@ -33,7 +33,7 @@ main:
     imulq   $8, %rax
     popq    %rdx
     addq    %rdx, %rax
-    addq    $0, %rax
+    addq    $4, %rax
     popq    %rdx
     movl    %edx, (%rax)
     movl    %edx, %eax
@@ -46,7 +46,7 @@ main:
     imulq   $8, %rax
     popq    %rdx
     addq    %rdx, %rax
-    addq    $4, %rax
+    addq    $0, %rax
     popq    %rdx
     movl    %edx, (%rax)
     movl    %edx, %eax
@@ -59,7 +59,7 @@ main:
     imulq   $8, %rax
     popq    %rdx
     addq    %rdx, %rax
-    addq    $0, %rax
+    addq    $4, %rax
     popq    %rdx
     movl    %edx, (%rax)
     movl    %edx, %eax
@@ -72,7 +72,7 @@ main:
     imulq   $8, %rax
     popq    %rdx
     addq    %rdx, %rax
-    addq    $4, %rax
+    addq    $0, %rax
     popq    %rdx
     movl    %edx, (%rax)
     movl    %edx, %eax
@@ -85,7 +85,7 @@ main:
     imulq   $8, %rax
     popq    %rdx
     addq    %rdx, %rax
-    addq    $0, %rax
+    addq    $4, %rax
     popq    %rdx
     movl    %edx, (%rax)
     movl    %edx, %eax
@@ -148,7 +148,7 @@ main:
     imulq   $8, %rax
     popq    %rdx
     addq    %rdx, %rax
-    addq    $4, %rax
+    addq    $0, %rax
     movl    (%rax), %eax
     pushq   %rax
     leaq    -24(%rbp), %rax
@@ -158,18 +158,6 @@ main:
     imulq   $8, %rax
     popq    %rdx
     addq    %rdx, %rax
-    addq    $0, %rax
-    movl    (%rax), %eax
-    popq    %rdx
-    addl    %edx, %eax
-    pushq   %rax
-    leaq    -24(%rbp), %rax
-    pushq   %rax
-    movl    $1, %eax
-    cltq
-    imulq   $8, %rax
-    popq    %rdx
-    addq    %rdx, %rax
     addq    $4, %rax
     movl    (%rax), %eax
     popq    %rdx
@@ -189,7 +177,7 @@ main:
     pushq   %rax
     leaq    -24(%rbp), %rax
     pushq   %rax
-    movl    $2, %eax
+    movl    $1, %eax
     cltq
     imulq   $8, %rax
     popq    %rdx
@@ -207,6 +195,18 @@ main:
     popq    %rdx
     addq    %rdx, %rax
     addq    $0, %rax
+    movl    (%rax), %eax
+    popq    %rdx
+    addl    %edx, %eax
+    pushq   %rax
+    leaq    -24(%rbp), %rax
+    pushq   %rax
+    movl    $2, %eax
+    cltq
+    imulq   $8, %rax
+    popq    %rdx
+    addq    %rdx, %rax
+    addq    $4, %rax
     movl    (%rax), %eax
     popq    %rdx
     addl    %edx, %eax

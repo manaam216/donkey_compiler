@@ -11,6 +11,8 @@
 struct global_symbol {
     const char *name;
     struct Symbol *sym;
+    int array_dims[DONKEY_MAX_ARRAY_DIMS];
+    int array_dim_count;
     int is_function;
     int is_defined;             /* a body was seen, not just a prototype */
     int is_variadic;            /* the parameter list ended with ... */
@@ -28,6 +30,9 @@ struct local_symbol {
     CType type;
     int pointer_depth;
     int array_length;
+    int array_dims[DONKEY_MAX_ARRAY_DIMS];
+    int array_dim_count;
+    int is_function_pointer;
     const char *struct_name;
     int depth;
     struct Symbol *sym;
@@ -79,6 +84,10 @@ struct sema_ctx {
     int frame_offset;
     int frame_max;
 
+    /* Registers used by the parameters of the function being analysed. */
+    int float_param_count;
+    int integer_param_count;
+
     const char *current_function;
     CType current_return_type;
     int current_return_pointer_depth;
@@ -117,6 +126,8 @@ static const char *semantic_type_name(CType type)
 {
     switch (type) {
         case TYPE_VOID: return "void";
+        case TYPE_FLOAT: return "float";
+        case TYPE_DOUBLE: return "double";
         case TYPE_CHAR: return "char";
         case TYPE_UCHAR: return "uchar";
         case TYPE_SHORT: return "short";
@@ -209,10 +220,45 @@ static struct Type *resolve_type(struct sema_ctx *ctx, struct ast_node *node)
     struct Type *type = base_type_for(ctx, node);
     int i;
 
+    /*
+     * A declarator that nested records how it derives its type; applying the
+     * steps in order is what distinguishes a pointer to an array from an array
+     * of pointers.
+     */
+    if (node->derivation_count > 0) {
+        for (i = 0; i < node->derivation_count; i++) {
+            switch (node->derivations[i].kind) {
+                case DERIVE_POINTER:
+                    type = ty_pointer_to(type);
+                    break;
+                case DERIVE_ARRAY:
+                    type = ty_array_of(type, node->derivations[i].length);
+                    break;
+                case DERIVE_FUNCTION:
+                    type = ty_func(type);
+                    break;
+            }
+        }
+        return type;
+    }
+
+    /* A function pointer points at a function returning the base type. */
+    if (node->is_function_pointer) {
+        return ty_pointer_to(ty_func(type));
+    }
+
     for (i = 0; i < node->pointer_depth; i++) {
         type = ty_pointer_to(type);
     }
-    if (node->array_length > 0) {
+    /*
+     * Build the array type from the inside out: `int a[2][3]` is an array of 2
+     * arrays of 3 ints, so the last dimension is applied first.
+     */
+    if (node->array_dim_count > 0) {
+        for (i = node->array_dim_count - 1; i >= 0; i--) {
+            type = ty_array_of(type, node->array_dims[i]);
+        }
+    } else if (node->array_length > 0) {
         type = ty_array_of(type, node->array_length);
     }
     return type;
@@ -404,6 +450,9 @@ static void add_global(struct sema_ctx *ctx, struct ast_node *node)
     ctx->globals[ctx->global_count].type = node->data_type;
     ctx->globals[ctx->global_count].pointer_depth = node->pointer_depth;
     ctx->globals[ctx->global_count].array_length = node->array_length;
+    memcpy(ctx->globals[ctx->global_count].array_dims, node->array_dims,
+        sizeof(node->array_dims));
+    ctx->globals[ctx->global_count].array_dim_count = node->array_dim_count;
     ctx->globals[ctx->global_count].struct_name = node->struct_name;
     ctx->globals[ctx->global_count].parameter_count = 0;
     if (is_function) {
@@ -481,6 +530,10 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
     ctx->locals[ctx->local_count].type = type;
     ctx->locals[ctx->local_count].pointer_depth = node->pointer_depth;
     ctx->locals[ctx->local_count].array_length = node->array_length;
+    memcpy(ctx->locals[ctx->local_count].array_dims, node->array_dims,
+        sizeof(node->array_dims));
+    ctx->locals[ctx->local_count].array_dim_count = node->array_dim_count;
+    ctx->locals[ctx->local_count].is_function_pointer = node->is_function_pointer;
     ctx->locals[ctx->local_count].struct_name = node->struct_name;
     ctx->locals[ctx->local_count].depth = ctx->scope_depth;
     ctx->local_count++;
@@ -498,6 +551,16 @@ static void add_parameter(struct sema_ctx *ctx, struct ast_node *node, int index
 
         node->sym = sym_new(node->value, SYM_PARAM, resolved);
         node->sym->param_index = index;
+        node->sym->float_index = ctx->float_param_count;
+        node->sym->integer_index = ctx->integer_param_count;
+        if (ty_is_float(resolved)) {
+            ctx->float_param_count++;
+        } else if (resolved->kind == TY_STRUCT) {
+            /* One integer register per eightbyte of the struct. */
+            ctx->integer_param_count += (resolved->size + 7) / 8;
+        } else {
+            ctx->integer_param_count++;
+        }
 
         if (index < 6) {
             /*
@@ -573,8 +636,43 @@ static void analyze_expression(struct sema_ctx *ctx, struct ast_node *node)
                 analyze_expression(ctx, item->left);
             }
             return;
+        case AST_COMPOUND_LITERAL: {
+            struct ast_node *item;
+
+            /*
+             * An unnamed object with the same storage duration as a local, so
+             * it needs a frame slot even though no declaration asked for one.
+             * Reserved here because this is the pass that tracks the frame.
+             */
+            if (!node->sym) {
+                struct Type *resolved = resolve_type(ctx, node);
+                int size = resolved->size > 0 ? resolved->size : 4;
+                int align = resolved->align > 4 ? resolved->align : 4;
+
+                node->sym = sym_new("<compound literal>", SYM_LOCAL, resolved);
+                ctx->frame_offset += size;
+                ctx->frame_offset = (ctx->frame_offset + align - 1) / align * align;
+                node->sym->offset = -ctx->frame_offset;
+                if (ctx->frame_offset > ctx->frame_max) {
+                    ctx->frame_max = ctx->frame_offset;
+                }
+            }
+
+            for (item = initializer_items(node->left); item; item = item->right) {
+                analyze_expression(ctx, item->left);
+            }
+            return;
+        }
         case AST_IDENTIFIER:
             symbol = find_global(ctx, node->value);
+            /*
+             * A function's name, used anywhere but in a call, is its address.
+             * That is what makes `f = add;` legal.
+             */
+            if (find_local(ctx, node->value) < 0 && symbol >= 0 &&
+                ctx->globals[symbol].is_function) {
+                return;
+            }
             if (find_local(ctx, node->value) < 0 &&
                 (symbol < 0 || ctx->globals[symbol].is_function)) {
                 semantic_error_at(ctx, node, "use of undeclared variable '%s'", node->value);
@@ -582,6 +680,24 @@ static void analyze_expression(struct sema_ctx *ctx, struct ast_node *node)
             return;
         case AST_CALL:
             symbol = find_global(ctx, node->value);
+            {
+                int local_index = find_local(ctx, node->value);
+
+                /*
+                 * A local holding a function pointer is callable. Its
+                 * arguments are not checked against a signature: the pointer's
+                 * parameter list is parsed for syntax only.
+                 */
+                if (local_index >= 0 && ctx->locals[local_index].is_function_pointer) {
+                    struct ast_node *argument;
+
+                    for (argument = node->left; argument; argument = argument->right) {
+                        analyze_expression(ctx,
+                            argument->type == AST_ARG_LIST ? argument->left : argument);
+                    }
+                    return;
+                }
+            }
             if (find_local(ctx, node->value) >= 0) {
                 semantic_error_at(ctx, node, "called object '%s' is not a function", node->value);
             } else if (symbol < 0) {
@@ -680,6 +796,16 @@ static void warn_if_unreachable(struct sema_ctx *ctx, struct ast_node *statement
         return;
     }
 
+    /*
+     * A case label, a default label, or a goto target is reachable by jumping
+     * to it, so what precedes it says nothing about whether it runs. Only
+     * straight-line code after a jump is genuinely unreachable.
+     */
+    if (next->type == AST_CASE || next->type == AST_DEFAULT ||
+        next->type == AST_LABEL) {
+        return;
+    }
+
     diag_set_function(ctx->current_function);
     diag_at(DIAG_WARNING, next->location,
         "unreachable statement after '%s'", keyword);
@@ -715,6 +841,38 @@ static void analyze_statement(struct sema_ctx *ctx, struct ast_node *node)
             analyze_expression(ctx, node->left);
             analyze_statement(ctx, node->right->left);
             analyze_statement(ctx, node->right->right);
+            break;
+        case AST_EMPTY:
+            break;
+        case AST_LABEL:
+            analyze_statement(ctx, node->left);
+            break;
+        case AST_GOTO:
+            /* Labels are resolved by the code generator, which sees them all. */
+            break;
+        case AST_DO_WHILE:
+            /*
+             * The body runs before the condition is first tested, but both are
+             * inside the loop for the purposes of break and continue.
+             */
+            ctx->loop_depth++;
+            analyze_statement(ctx, node->right);
+            ctx->loop_depth--;
+            analyze_expression(ctx, node->left);
+            break;
+        case AST_SWITCH:
+            analyze_expression(ctx, node->left);
+            /*
+             * break inside a switch leaves the switch, so it counts as being
+             * inside a breakable construct even outside any loop.
+             */
+            ctx->loop_depth++;
+            analyze_statement(ctx, node->right);
+            ctx->loop_depth--;
+            break;
+        case AST_CASE:
+        case AST_DEFAULT:
+            analyze_statement(ctx, node->left);
             break;
         case AST_WHILE:
             analyze_expression(ctx, node->left);
@@ -851,6 +1009,8 @@ static void analyze_top_level(struct sema_ctx *ctx, struct ast_node *node)
         ctx->loop_depth = 0;
         ctx->frame_offset = 0;
         ctx->frame_max = 0;
+        ctx->float_param_count = 0;
+        ctx->integer_param_count = 0;
 
         for (param = node->left; param; param = param->right) {
             if (param->type == AST_PARAM_LIST) {
@@ -878,6 +1038,13 @@ static CType integer_promotion(CType type)
 
 static CType usual_arithmetic_type(CType left, CType right)
 {
+    /*
+     * Floating point outranks every integer type, and double outranks float,
+     * so a mixed expression is done at the wider of the two.
+     */
+    if (left == TYPE_DOUBLE || right == TYPE_DOUBLE) return TYPE_DOUBLE;
+    if (left == TYPE_FLOAT || right == TYPE_FLOAT) return TYPE_FLOAT;
+
     left = integer_promotion(left);
     right = integer_promotion(right);
     if (left == right) return left;
@@ -904,6 +1071,12 @@ static void insert_conversion(struct ast_node **slot, CType target)
     }
     cast = create_ast_node(AST_CAST, (char *)semantic_type_name(target), *slot, NULL);
     cast->data_type = target;
+    /*
+     * Resolve the inserted cast's type here. It is created after its operand
+     * has been checked, so nothing else will visit it -- and a floating
+     * conversion needs the type, not just the name, to pick its instruction.
+     */
+    cast->ty = ty_from_name(semantic_type_name(target));
     *slot = cast;
 }
 
@@ -999,6 +1172,9 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
     switch (node->type) {
         case AST_INTLIT:
             return node->data_type = TYPE_INT;
+        case AST_FLOATLIT:
+            /* The parser already decided float or double from the suffix. */
+            return node->data_type;
         case AST_STRINGLIT:
             node->pointer_depth = 1;
             return node->data_type = TYPE_CHAR;
@@ -1006,8 +1182,39 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
             /* Type the operand so its size is known; it is never evaluated. */
             if (node->left) {
                 check_expression_type(ctx, &node->left);
+            } else if (node->struct_name) {
+                /*
+                 * sizeof(struct X): resolve the tag now that the definition
+                 * has been collected, and hang the layout on the node.
+                 */
+                int index = find_struct(ctx, node->struct_name);
+
+                if (index >= 0) {
+                    node->ty = ctx->structs[index].ty;
+                } else {
+                    semantic_error_at(ctx, node, "unknown struct type '%s'",
+                        node->struct_name);
+                }
             }
             return node->data_type = TYPE_UINT;
+        case AST_COMPOUND_LITERAL: {
+            /*
+             * A compound literal is an unnamed object with the same storage
+             * duration as a local, so it is given a frame slot here even though
+             * no declaration asked for one.
+             */
+            struct ast_node *item;
+
+            /*
+             * The slot was reserved during name resolution, which is the pass
+             * that tracks the frame. Allocating here instead would hand out
+             * offsets already given to locals.
+             */
+            for (item = initializer_items(node->left); item; item = item->right) {
+                check_expression_type(ctx, &item->left);
+            }
+            return node->data_type;
+        }
         case AST_INITIALIZER_LIST:
             semantic_error_at(ctx, node, "initializer list is not valid in this expression");
             return node->data_type = TYPE_INVALID;
@@ -1019,13 +1226,26 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
                 node->data_type = ctx->locals[local].type;
                 node->pointer_depth = ctx->locals[local].pointer_depth;
                 node->array_length = ctx->locals[local].array_length;
+                memcpy(node->array_dims, ctx->locals[local].array_dims,
+                    sizeof(node->array_dims));
+                node->array_dim_count = ctx->locals[local].array_dim_count;
+                node->is_function_pointer = ctx->locals[local].is_function_pointer;
                 node->struct_name = ctx->locals[local].struct_name ? strdup(ctx->locals[local].struct_name) : NULL;
                 return node->data_type;
+            }
+            if (global >= 0 && ctx->globals[global].is_function) {
+                node->sym = ctx->globals[global].sym;
+                node->is_function_pointer = 1;
+                node->pointer_depth = 1;
+                return node->data_type = ctx->globals[global].type;
             }
             if (global >= 0 && !ctx->globals[global].is_function) {
                 node->sym = ctx->globals[global].sym;
                 node->pointer_depth = ctx->globals[global].pointer_depth;
                 node->array_length = ctx->globals[global].array_length;
+                memcpy(node->array_dims, ctx->globals[global].array_dims,
+                    sizeof(node->array_dims));
+                node->array_dim_count = ctx->globals[global].array_dim_count;
                 node->struct_name = ctx->globals[global].struct_name ? strdup(ctx->globals[global].struct_name) : NULL;
                 return node->data_type = ctx->globals[global].type;
             }
@@ -1050,11 +1270,50 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
             node->array_length = 0;
             return node->data_type;
         }
-        case AST_CALL:
-            global = find_global(ctx, node->value);
+        case AST_CALL: {
+            int callee_local = find_local(ctx, node->value);
+
+            /*
+             * A call through a local function pointer takes the pointer's
+             * return type; there is no stored signature to check against.
+             */
+            if (callee_local >= 0 && ctx->locals[callee_local].is_function_pointer) {
+                struct ast_node *arg;
+
+                for (arg = node->left; arg; arg = arg->right) {
+                    check_expression_type(ctx, &arg->left);
+                }
+                node->is_indirect_call = 1;
+                node->sym = ctx->locals[callee_local].sym;
+                return node->data_type = ctx->locals[callee_local].type;
+            }
+        }
+        /* fall through to the ordinary, named call */
+        global = find_global(ctx, node->value);
             argument_index = 0;
             for (argument = node->left; argument; argument = argument->right) {
                 check_expression_type(ctx, &argument->left);
+                /*
+                 * Passing a struct by value needs the System V classification
+                 * rules -- small ones travel in registers, larger ones on the
+                 * stack. That is not implemented, so it is refused rather than
+                 * quietly passing the wrong thing; a pointer to it works.
+                 */
+                /*
+                 * System V classifies a struct by size. With no floating-point
+                 * types there is only the INTEGER class, so one of eight bytes
+                 * or fewer travels in a single register -- which is exactly one
+                 * argument slot, the shape the call sequence already has.
+                 * Anything larger needs two registers or a stack copy, so it is
+                 * refused rather than passed wrongly.
+                 */
+                if (argument->left && argument->left->ty &&
+                    argument->left->ty->kind == TY_STRUCT &&
+                    argument->left->ty->size > 16) {
+                    semantic_error_at(ctx, argument->left,
+                        "cannot pass a struct larger than 16 bytes by value yet; "
+                        "pass a pointer to it");
+                }
                 if (global >= 0 && ctx->globals[global].is_function &&
                     argument_index < ctx->globals[global].parameter_count) {
                     if (semantic_effective_pointer_depth(argument->left) !=
@@ -1100,6 +1359,12 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
             node->data_type = node->left->data_type;
             node->pointer_depth = node->left->pointer_depth - 1;
             node->array_length = 0;
+            /*
+             * Carry the struct tag through, so *p and p->field reach the same
+             * fields that p.field would on a struct value.
+             */
+            node->struct_name = node->left->struct_name ?
+                strdup(node->left->struct_name) : NULL;
             return node->data_type;
         case AST_ARRAY_SUBSCRIPT:
             check_expression_type(ctx, &node->left);
@@ -1115,7 +1380,23 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
             node->data_type = node->left->data_type;
             node->pointer_depth = node->left->array_length > 0 ?
                 node->left->pointer_depth : node->left->pointer_depth - 1;
-            node->array_length = 0;
+            /*
+             * Indexing peels off the outermost dimension: an element of
+             * `int[2][3]` is an `int[3]`, which is itself still an array.
+             */
+            if (node->left->array_dim_count > 1) {
+                int d;
+
+                node->array_dim_count = node->left->array_dim_count - 1;
+                for (d = 0; d < node->array_dim_count; d++) {
+                    node->array_dims[d] = node->left->array_dims[d + 1];
+                }
+                node->array_length = node->array_dims[0];
+                node->pointer_depth = node->left->pointer_depth;
+            } else {
+                node->array_dim_count = 0;
+                node->array_length = 0;
+            }
             /*
              * Carry the struct tag through the subscript, so an element of a
              * struct array is still a struct and its fields stay accessible.
@@ -1208,10 +1489,48 @@ static void check_initializer_list_types(struct sema_ctx *ctx, struct ast_node *
         return;
     }
 
+    /*
+     * A struct is initialised member by member rather than by index, so the
+     * limit is how many members it has and each value converts to the type of
+     * the one it lands in.
+     */
+    if (declaration->array_length == 0 && declaration->struct_name) {
+        int struct_index = find_struct(ctx, declaration->struct_name);
+        int field = 0;
+
+        for (item = initializer_items(declaration->left); item; item = item->right) {
+            if (item->left && item->left->designator_field) {
+                field = find_struct_field(ctx, struct_index,
+                    item->left->designator_field);
+                if (field < 0) {
+                    semantic_error_at(ctx, item->left, "struct '%s' has no field '%s'",
+                        declaration->struct_name, item->left->designator_field);
+                    return;
+                }
+            }
+            if (struct_index < 0 || field >= ctx->structs[struct_index].field_count) {
+                semantic_error_at(ctx, item->left ? item->left : item,
+                    "too many initializers for '%s'", declaration->value);
+                return;
+            }
+            check_expression_type(ctx, &item->left);
+            if (item->left) {
+                insert_conversion(&item->left,
+                    ctx->structs[struct_index].fields[field].type);
+            }
+            field++;
+        }
+        return;
+    }
+
     for (item = initializer_items(declaration->left); item; item = item->right) {
+        /* A designator places its element; the ones after it follow on. */
+        if (item->left && item->left->designator_index >= 0) {
+            index = item->left->designator_index;
+        }
         if (index >= declaration->array_length) {
             semantic_error_at(ctx, item->left ? item->left : item,
-                "too many initializers for array '%s'", declaration->value);
+                "initializer for '%s' is outside the array", declaration->value);
             return;
         }
         check_expression_type(ctx, &item->left);
@@ -1244,7 +1563,13 @@ static void check_statement_types(struct sema_ctx *ctx, struct ast_node *node)
                 if (node->array_length > 0) {
                     check_initializer_list_types(ctx, node);
                 } else if (node->left->type == AST_INITIALIZER_LIST) {
-                    semantic_error_at(ctx, node->left, "initializer list is only valid for arrays");
+                    /* A struct may be brace-initialised too, field by field. */
+                    if (!node->struct_name) {
+                        semantic_error_at(ctx, node->left,
+                            "initializer list is only valid for arrays and structs");
+                    } else {
+                        check_initializer_list_types(ctx, node);
+                    }
                 } else {
                     check_expression_type(ctx, &node->left);
                     if (node->pointer_depth > 0 || semantic_effective_pointer_depth(node->left) > 0) {
@@ -1292,6 +1617,22 @@ static void check_statement_types(struct sema_ctx *ctx, struct ast_node *node)
             check_statement_types(ctx, node->right->left);
             check_statement_types(ctx, node->right->right);
             break;
+        case AST_EMPTY:
+        case AST_GOTO:
+            break;
+        case AST_LABEL:
+        case AST_CASE:
+        case AST_DEFAULT:
+            check_statement_types(ctx, node->left);
+            break;
+        case AST_DO_WHILE:
+            check_expression_type(ctx, &node->left);
+            check_statement_types(ctx, node->right);
+            break;
+        case AST_SWITCH:
+            check_expression_type(ctx, &node->left);
+            check_statement_types(ctx, node->right);
+            break;
         case AST_WHILE:
             check_expression_type(ctx, &node->left);
             check_statement_types(ctx, node->right);
@@ -1329,7 +1670,10 @@ static void check_top_level_types(struct sema_ctx *ctx, struct ast_node *node)
             if (node->array_length > 0) {
                 check_initializer_list_types(ctx, node);
             } else if (node->left->type == AST_INITIALIZER_LIST) {
-                semantic_error_at(ctx, node->left, "initializer list is only valid for arrays");
+                if (!node->struct_name) {
+                    semantic_error_at(ctx, node->left,
+                        "initializer list is only valid for arrays and structs");
+                }
             } else {
                 check_expression_type(ctx, &node->left);
                 insert_conversion(&node->left, node->data_type);
@@ -1343,6 +1687,8 @@ static void check_top_level_types(struct sema_ctx *ctx, struct ast_node *node)
         ctx->local_count = 0;
         ctx->scope_depth = 1;
         ctx->frame_offset = 0;
+        ctx->float_param_count = 0;
+        ctx->integer_param_count = 0;
         {
             int param_index = 0;
             for (param = node->left; param; param = param->right)

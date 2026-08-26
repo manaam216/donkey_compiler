@@ -3,6 +3,12 @@
 
 #include <stdio.h>
 
+/* Nesting depth for array declarators, as in int a[2][3][4]. */
+#define DONKEY_MAX_ARRAY_DIMS 4
+
+/* Derivation steps in one declarator, as in int (*a[3])(void). */
+#define DONKEY_MAX_DERIVATIONS 8
+
 typedef enum {
     T_OPENBRACE,
     T_CLOSEBRACE,
@@ -25,13 +31,20 @@ typedef enum {
     T_IF,
     T_ELSE,
     T_WHILE,
+    T_DO,
     T_FOR,
+    T_SWITCH,
+    T_CASE,
+    T_DEFAULT,
+    T_GOTO,
     T_BREAK,
     T_CONTINUE,
     T_STRUCT,
     T_UNION,
     T_ENUM,
     T_VOID,
+    T_FLOAT,
+    T_DOUBLE,
     T_TYPEDEF,
     T_EXTERN,
     T_STATIC,
@@ -41,6 +54,7 @@ typedef enum {
     T_SIZEOF,
     T_IDENTIFIER,
     T_INTLIT,
+    T_FLOATLIT,
     T_CHARLIT,
     T_STRINGLIT,
     T_BITWISE_COMPLEMENT,
@@ -54,6 +68,7 @@ typedef enum {
     T_SLASH_ASSIGN,
     T_MINUS,
     T_MINUS_MINUS,
+    T_ARROW,
     T_MINUS_ASSIGN,
     T_PERCENT,
     T_PERCENT_ASSIGN,
@@ -98,12 +113,21 @@ typedef enum {
     AST_PARAM_LIST,
     AST_ARG_LIST,
     AST_INITIALIZER_LIST,
+    AST_COMPOUND_LITERAL,
     AST_CONDITIONAL,
     AST_CONDITIONAL_BRANCHES,
     AST_IF,
     AST_IF_BRANCHES,
     AST_WHILE,
+    AST_DO_WHILE,
     AST_FOR,
+    AST_SWITCH,
+    AST_SWITCH_BODY,
+    AST_CASE,
+    AST_DEFAULT,
+    AST_GOTO,
+    AST_LABEL,
+    AST_EMPTY,
     AST_FOR_PARTS,
     AST_BREAK,
     AST_CONTINUE,
@@ -115,6 +139,7 @@ typedef enum {
     AST_ARRAY_SUBSCRIPT,
     AST_FIELD_ACCESS,
     AST_INTLIT,
+    AST_FLOATLIT,
     AST_STRINGLIT,
     AST_IDENTIFIER,
     AST_NEGATION,
@@ -156,7 +181,9 @@ typedef enum {
     TYPE_INT,
     TYPE_UINT,
     TYPE_LONG,
-    TYPE_ULONG
+    TYPE_ULONG,
+    TYPE_FLOAT,
+    TYPE_DOUBLE
 } CType;
 
 typedef struct {
@@ -183,6 +210,44 @@ struct ast_node {
     CType data_type;
     int pointer_depth;
     int array_length;
+
+    /*
+     * All dimensions of an array declarator, outermost first, so `int a[2][3]`
+     * can be resolved to an array of arrays. array_length above is the first
+     * of them, which is all a one-dimensional array ever needed.
+     */
+    int array_dims[DONKEY_MAX_ARRAY_DIMS];
+    int array_dim_count;
+
+    /*
+     * Set on a declarator that names a pointer to a function, so calls through
+     * it are indirect.
+     */
+    int is_function_pointer;
+
+    /*
+     * How a declarator derives its type from the base type, in the order the
+     * steps apply. `int (*a)[10]` yields ARRAY(10) then POINTER -- a is a
+     * pointer to an array -- while `int *a[10]` yields POINTER then ARRAY(10),
+     * an array of pointers. The flat fields above cannot tell those apart,
+     * which is why a declarator with parentheses records its derivation here.
+     */
+    struct {
+        enum { DERIVE_POINTER, DERIVE_ARRAY, DERIVE_FUNCTION } kind;
+        int length;                 /* DERIVE_ARRAY */
+    } derivations[DONKEY_MAX_DERIVATIONS];
+    int derivation_count;
+
+    /* AST_CALL through a function pointer, so the call is indirect. */
+    int is_indirect_call;
+
+    /*
+     * On an initializer-list element, the designator that placed it:
+     * `[2] = x` sets designator_index, `.field = x` sets designator_field.
+     * An element with neither follows the one before it, as C requires.
+     */
+    int designator_index;
+    char *designator_field;
     char *struct_name;
 
     /*

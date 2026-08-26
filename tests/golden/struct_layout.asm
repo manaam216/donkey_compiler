@@ -10,7 +10,7 @@ main:
     movsbl  %al, %eax
     pushq   %rax
     leaq    -12(%rbp), %rax
-    addq    $8, %rax
+    addq    $0, %rax
     popq    %rdx
     movb    %dl, (%rax)
     movl    %edx, %eax
@@ -25,7 +25,7 @@ main:
     movsbl  %al, %eax
     pushq   %rax
     leaq    -12(%rbp), %rax
-    addq    $0, %rax
+    addq    $8, %rax
     popq    %rdx
     movb    %dl, (%rax)
     movl    %edx, %eax
@@ -33,7 +33,7 @@ main:
     movsbl  %al, %eax
     pushq   %rax
     leaq    -16(%rbp), %rax
-    addq    $2, %rax
+    addq    $0, %rax
     popq    %rdx
     movb    %dl, (%rax)
     movl    %edx, %eax
@@ -49,23 +49,35 @@ main:
     movsbl  %al, %eax
     pushq   %rax
     leaq    -16(%rbp), %rax
-    addq    $0, %rax
+    addq    $2, %rax
     popq    %rdx
     movb    %dl, (%rax)
     movl    %edx, %eax
     leaq    -12(%rbp), %rax
-    addq    $8, %rax
+    addq    $0, %rax
     movsbl  (%rax), %eax
+    pushq   %rax
+    movl    $1, %eax
+    popq    %rdx
+    imull   %edx, %eax
     pushq   %rax
     leaq    -12(%rbp), %rax
     addq    $4, %rax
     movl    (%rax), %eax
+    pushq   %rax
+    movl    $10, %eax
+    popq    %rdx
+    imull   %edx, %eax
     popq    %rdx
     addl    %edx, %eax
     pushq   %rax
     leaq    -12(%rbp), %rax
-    addq    $0, %rax
+    addq    $8, %rax
     movsbl  (%rax), %eax
+    pushq   %rax
+    movl    $100, %eax
+    popq    %rdx
+    imull   %edx, %eax
     popq    %rdx
     addl    %edx, %eax
     pushq   %rax
@@ -76,20 +88,32 @@ main:
     movl    -20(%rbp), %eax
     pushq   %rax
     leaq    -16(%rbp), %rax
-    addq    $2, %rax
+    addq    $0, %rax
     movsbl  (%rax), %eax
+    pushq   %rax
+    movl    $1, %eax
+    popq    %rdx
+    imull   %edx, %eax
     popq    %rdx
     addl    %edx, %eax
     pushq   %rax
     leaq    -16(%rbp), %rax
     addq    $1, %rax
     movsbl  (%rax), %eax
+    pushq   %rax
+    movl    $10, %eax
+    popq    %rdx
+    imull   %edx, %eax
     popq    %rdx
     addl    %edx, %eax
     pushq   %rax
     leaq    -16(%rbp), %rax
-    addq    $0, %rax
+    addq    $2, %rax
     movsbl  (%rax), %eax
+    pushq   %rax
+    movl    $100, %eax
+    popq    %rdx
+    imull   %edx, %eax
     popq    %rdx
     addl    %edx, %eax
     pushq   %rax

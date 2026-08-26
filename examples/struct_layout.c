@@ -28,9 +28,14 @@ int main()
     p.b = 2;
     p.c = 3;
 
-    /* Overlapping fields would corrupt these values. */
-    total = m.tag + m.value + m.flag;
-    total = total + p.a + p.b + p.c;
+    /*
+     * Weighted, not summed. Every earlier test added the fields up, which is
+     * the same answer whatever order they are in -- so a struct laid out in
+     * reverse declaration order looked correct for a long time. These weights
+     * make the order observable.
+     */
+    total = m.tag * 1 + m.value * 10 + m.flag * 100;
+    total = total + p.a * 1 + p.b * 10 + p.c * 100;
 
     /* 1 + 3 padding + 4 + 1 + 3 tail padding = 12; three chars = 3. */
     total = total + sizeof(m) + sizeof(p);
