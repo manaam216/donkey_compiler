@@ -611,6 +611,33 @@ static void analyze_expression(struct sema_ctx *ctx, struct ast_node *node)
                 analyze_expression(ctx, item->left);
             }
             return;
+        case AST_COMPOUND_LITERAL: {
+            struct ast_node *item;
+
+            /*
+             * An unnamed object with the same storage duration as a local, so
+             * it needs a frame slot even though no declaration asked for one.
+             * Reserved here because this is the pass that tracks the frame.
+             */
+            if (!node->sym) {
+                struct Type *resolved = resolve_type(ctx, node);
+                int size = resolved->size > 0 ? resolved->size : 4;
+                int align = resolved->align > 4 ? resolved->align : 4;
+
+                node->sym = sym_new("<compound literal>", SYM_LOCAL, resolved);
+                ctx->frame_offset += size;
+                ctx->frame_offset = (ctx->frame_offset + align - 1) / align * align;
+                node->sym->offset = -ctx->frame_offset;
+                if (ctx->frame_offset > ctx->frame_max) {
+                    ctx->frame_max = ctx->frame_offset;
+                }
+            }
+
+            for (item = initializer_items(node->left); item; item = item->right) {
+                analyze_expression(ctx, item->left);
+            }
+            return;
+        }
         case AST_IDENTIFIER:
             symbol = find_global(ctx, node->value);
             /*
@@ -1145,6 +1172,24 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
                 }
             }
             return node->data_type = TYPE_UINT;
+        case AST_COMPOUND_LITERAL: {
+            /*
+             * A compound literal is an unnamed object with the same storage
+             * duration as a local, so it is given a frame slot here even though
+             * no declaration asked for one.
+             */
+            struct ast_node *item;
+
+            /*
+             * The slot was reserved during name resolution, which is the pass
+             * that tracks the frame. Allocating here instead would hand out
+             * offsets already given to locals.
+             */
+            for (item = initializer_items(node->left); item; item = item->right) {
+                check_expression_type(ctx, &item->left);
+            }
+            return node->data_type;
+        }
         case AST_INITIALIZER_LIST:
             semantic_error_at(ctx, node, "initializer list is not valid in this expression");
             return node->data_type = TYPE_INVALID;

@@ -124,6 +124,7 @@ static const char *ast_kind_name(int kind)
         case AST_PARAM_LIST: return "param_list";
         case AST_ARG_LIST: return "arg_list";
         case AST_INITIALIZER_LIST: return "initializer_list";
+        case AST_COMPOUND_LITERAL: return "compound_literal";
         case AST_CONDITIONAL: return "conditional";
         case AST_CONDITIONAL_BRANCHES: return "conditional_branches";
         case AST_IF: return "if";

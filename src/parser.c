@@ -1805,7 +1805,38 @@ struct ast_node* parse_factor(struct token *tokens, int *token_index)
         SourceLocation paren_location = tok->location;
         (*token_index)++;
         int type_index = *token_index;
-        const char *type_name = parse_type_name(tokens, &type_index);
+        const char *struct_tag = NULL;
+        const char *type_name;
+
+        /*
+         * A compound literal, `(struct Point){1, 2}` or `(int[3]){1, 2, 3}`,
+         * looks like a cast until the brace. It names a type and then an
+         * initializer, and yields an unnamed object of that type.
+         */
+        if (tokens[type_index].type == T_STRUCT &&
+            tokens[type_index + 1].type == T_IDENTIFIER) {
+            struct_tag = tokens[type_index + 1].value;
+            type_index += 2;
+            type_name = "int";
+        } else {
+            type_name = parse_type_name(tokens, &type_index);
+        }
+
+        if ((type_name || struct_tag) && tokens[type_index].type == T_CLOSEPAREN &&
+            tokens[type_index + 1].type == T_OPENBRACE) {
+            struct ast_node *literal;
+
+            *token_index = type_index + 1;
+            literal = create_ast_node_at(AST_COMPOUND_LITERAL, NULL,
+                parse_initializer(tokens, token_index), NULL, paren_location);
+            literal->data_type = type_from_name(type_name);
+            literal->struct_name = struct_tag ? strdup(struct_tag) : NULL;
+            return literal;
+        }
+
+        /* Not a compound literal after all: an ordinary cast, or a group. */
+        type_index = *token_index;
+        type_name = parse_type_name(tokens, &type_index);
         if (type_name && tokens[type_index].type == T_CLOSEPAREN) {
             *token_index = type_index + 1;
             struct ast_node *cast = create_ast_node_at(AST_CAST, (char *)type_name,

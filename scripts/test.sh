@@ -61,6 +61,7 @@ examples/function_pointers.c function_pointers
 examples/struct_by_value.c struct_by_value
 examples/floating_point.c floating_point
 examples/initializers.c initializers
+examples/compound_literals.c compound_literals
 examples/struct_pointers.c struct_pointers
 examples/struct_copy.c struct_copy
 examples/libc_call.c libc_call

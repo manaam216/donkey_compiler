@@ -240,6 +240,8 @@ Supported expression features:
 - Designated initializers, which say where a value goes and let the ones after
   it follow on: `int a[6] = {[1] = 10, [4] = 40};`,
   `struct Point p = {.z = 30, .x = 10};`
+- Compound literals: `sum((struct Point){3, 4})`, which build an unnamed object
+  where they appear
 - Address-of, dereference, and indexing expressions: `&x`, `*p`, and `a[i]`
 - Struct field access through a pointer: `p->field`
 - `++` and `--` on any assignable expression, not only named variables:
@@ -452,8 +454,9 @@ This removes the `build/` directory.
   `TYPE (*name)(params)`. The general recursive declarator grammar, which would
   also give `int (*a)[10]`, is not implemented.
 - `long double` is not distinguished from `double`.
-- No compound literals: `(struct Point){1, 2}` does not parse. Designated
-  initializers, the more useful half of that pair, do.
+- A compound literal can be passed, assigned, and initialised with designators,
+  but a member cannot be taken from one directly: `(struct Point){1, 2}.x` does
+  not parse. Postfix operators apply only to a named primary.
 - No `union`, and no nested struct definitions.
 - Global initializers must be constant expressions.
 - Arrays cannot be assigned as whole values.

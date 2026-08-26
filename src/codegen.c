@@ -698,9 +698,103 @@ static void generate_identifier_store(struct ast_node *node, FILE *output)
     emit_store_global(sym->ty, sym->name, output);
 }
 
+/*
+ * Fill an object at a frame offset from a brace initializer. This is the same
+ * work a declaration with an initializer does, factored out so a compound
+ * literal -- which has storage but no declaration -- can reuse it.
+ */
+static void generate_initializer_into(struct cg_ctx *ctx, struct Type *ty,
+    int offset, struct ast_node *initializer, FILE *output)
+{
+    struct ast_node *item;
+
+    if (!ty) {
+        return;
+    }
+
+    if (ty->kind == TY_ARRAY) {
+        int stride = ty_element_size(ty);
+        struct Type *element = ty->base;
+        int index;
+        char *written = calloc((size_t)ty->array_length, 1);
+
+        if (!written) {
+            return;
+        }
+        index = 0;
+        for (item = initializer_items(initializer); item; item = item->right) {
+            if (item->left && item->left->designator_index >= 0) {
+                index = item->left->designator_index;
+            }
+            if (index >= 0 && index < ty->array_length) {
+                written[index] = 1;
+            }
+            index++;
+        }
+        for (index = 0; index < ty->array_length; index++) {
+            if (!written[index]) {
+                emit_zero_offset(element, offset + (index * stride), output);
+            }
+        }
+        free(written);
+
+        index = 0;
+        for (item = initializer_items(initializer); item; item = item->right) {
+            if (item->left && item->left->designator_index >= 0) {
+                index = item->left->designator_index;
+            }
+            if (index >= ty->array_length) {
+                break;
+            }
+            generate_exp(ctx, item->left, output);
+            emit_store_offset(element, offset + (index * stride), output);
+            index++;
+        }
+        return;
+    }
+
+    if (ty->kind == TY_STRUCT) {
+        struct Member *member = ty->members;
+        int i;
+
+        for (i = 0; i < ty->size; i += 4) {
+            fprintf(output, "    movl    $0, %d(%%rbp)\n", offset + i);
+        }
+        for (item = initializer_items(initializer); item && member;
+             item = item->right) {
+            if (item->left && item->left->designator_field) {
+                member = ty_find_member(ty, item->left->designator_field);
+                if (!member) {
+                    break;
+                }
+            }
+            generate_exp(ctx, item->left, output);
+            emit_store_offset(member->ty, offset + member->offset, output);
+            member = member->next;
+        }
+        return;
+    }
+
+    /* A scalar compound literal, as in (int){5}. */
+    if (initializer) {
+        generate_exp(ctx, initializer_items(initializer)
+            ? initializer_items(initializer)->left : initializer, output);
+        emit_store_slot(ty, offset, output);
+    }
+}
+
 static void generate_lvalue_address(struct cg_ctx *ctx, struct ast_node *node, FILE *output)
 {
     switch (node->type) {
+        case AST_COMPOUND_LITERAL:
+            /*
+             * The literal is written into its slot at the point it appears,
+             * then behaves like any other object at that address.
+             */
+            generate_initializer_into(ctx, node->ty, node->sym->offset,
+                node->left, output);
+            fprintf(output, "    leaq    %d(%%rbp), %%rax\n", node->sym->offset);
+            return;
         case AST_IDENTIFIER:
             if (is_frame_symbol(node->sym)) {
                 fprintf(output, "    leaq    %d(%%rbp), %%rax\n", node->sym->offset);
