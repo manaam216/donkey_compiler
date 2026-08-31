@@ -20,14 +20,20 @@ integer-returning functions.
 |-- src/              Compiler implementation, grouped by pipeline stage
 |   |-- main.c        CLI entry point
 |   |-- frontend/     Source text to syntax tree
-|   |   |-- preprocess.c   Directives, macro expansion, #include
+|   |   |-- preprocess.c   Token lists, path interning, the directive loop
+|   |   |-- pp_macro.c     The macro table and macro expansion
+|   |   |-- pp_cond.c      #if expression evaluation
+|   |   |-- pp_include.c   Header lookup, #pragma once, nested includes
 |   |   |-- lexer.c        Tokenizer
 |   |   |-- parser.c       Shared: recovery, typedefs, enums, declarators
 |   |   |-- parser_decl.c  Declarations
 |   |   |-- parser_stmt.c  Statements
 |   |   `-- parser_expr.c  Expressions, one function per precedence level
 |   |-- analysis/     Names, types, and storage
-|   |   |-- semantic.c     Name, scope, type, and call validation
+|   |   |-- semantic.c     Diagnostics, shared lookups, the entry point
+|   |   |-- sema_scope.c   Struct, global, local, and parameter tables
+|   |   |-- sema_resolve.c Pass one: names, scopes, and storage
+|   |   |-- sema_type.c    Pass two: expression and statement types
 |   |   |-- type.c         Type representation, sizes, struct layout
 |   |   `-- symbol.c       Storage identities and stack frame layout
 |   |-- backend/      Syntax tree to assembly
@@ -93,7 +99,7 @@ On Windows with MinGW GCC and no `make`, run:
 
 ```powershell
 New-Item -ItemType Directory -Force build
-gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\preprocess.c src\lexer.c src\parser.c src\semantic.c src\type.c src\symbol.c src\diag.c src\dump.c src\cli.c src\codegen.c
+gcc -Iinclude -Isrc/frontend -Isrc/analysis -Isrc/backend -Wall -Wextra -g -o build\donkey.exe src\main.c src\frontend\*.c src\analysis\*.c src\backend\*.c src\support\*.c
 ```
 
 ## Test

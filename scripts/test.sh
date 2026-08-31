@@ -77,8 +77,8 @@ mkdir -p "$golden_dir" "$expected_dir"
 cflags="${CFLAGS:--Wall -Wextra -g}"
 
 # shellcheck disable=SC2086 # cflags is a deliberate word-split flag list
-"$cc" -Iinclude -Isrc/frontend -Isrc/backend $cflags -o "$compiler" \
-    src/main.c src/frontend/lexer.c src/frontend/preprocess.c src/frontend/parser.c src/frontend/parser_decl.c src/frontend/parser_stmt.c src/frontend/parser_expr.c src/analysis/semantic.c src/analysis/type.c src/analysis/symbol.c src/backend/codegen.c src/backend/codegen_emit.c src/backend/codegen_data.c src/backend/codegen_stmt.c src/backend/codegen_expr.c src/support/mem.c src/support/file.c src/support/diag.c src/support/cli.c src/support/dump.c
+"$cc" -Iinclude -Isrc/frontend -Isrc/analysis -Isrc/backend $cflags -o "$compiler" \
+    src/main.c src/frontend/lexer.c src/frontend/preprocess.c src/frontend/pp_macro.c src/frontend/pp_cond.c src/frontend/pp_include.c src/frontend/parser.c src/frontend/parser_decl.c src/frontend/parser_stmt.c src/frontend/parser_expr.c src/analysis/semantic.c src/analysis/sema_scope.c src/analysis/sema_resolve.c src/analysis/sema_type.c src/analysis/type.c src/analysis/symbol.c src/backend/codegen.c src/backend/codegen_emit.c src/backend/codegen_data.c src/backend/codegen_stmt.c src/backend/codegen_expr.c src/support/mem.c src/support/file.c src/support/diag.c src/support/cli.c src/support/dump.c
 
 failures=0
 
@@ -97,7 +97,7 @@ run_unit() {
     name="$1"
     shift
     # shellcheck disable=SC2086
-    "$cc" -Iinclude -Isrc/frontend -Isrc/backend $cflags -o "$build_dir/$name" "tests/unit/$name.c" "$@"
+    "$cc" -Iinclude -Isrc/frontend -Isrc/analysis -Isrc/backend $cflags -o "$build_dir/$name" "tests/unit/$name.c" "$@"
     if "$build_dir/$name" >"$build_dir/$name.log" 2>&1; then
         # The summary, not the last line: provoked diagnostics interleave.
         grep -E "checks passed|check\(s\) failed" "$build_dir/$name.log" | tail -1
