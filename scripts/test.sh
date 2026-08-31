@@ -77,8 +77,8 @@ mkdir -p "$golden_dir" "$expected_dir"
 cflags="${CFLAGS:--Wall -Wextra -g}"
 
 # shellcheck disable=SC2086 # cflags is a deliberate word-split flag list
-"$cc" -Iinclude $cflags -o "$compiler" \
-    src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c src/type.c src/symbol.c src/diag.c src/dump.c src/cli.c src/preprocess.c
+"$cc" -Iinclude -Isrc/frontend -Isrc/backend $cflags -o "$compiler" \
+    src/main.c src/frontend/lexer.c src/frontend/preprocess.c src/frontend/parser.c src/frontend/parser_decl.c src/frontend/parser_stmt.c src/frontend/parser_expr.c src/analysis/semantic.c src/analysis/type.c src/analysis/symbol.c src/backend/codegen.c src/backend/codegen_emit.c src/backend/codegen_data.c src/backend/codegen_stmt.c src/backend/codegen_expr.c src/support/mem.c src/support/file.c src/support/diag.c src/support/cli.c src/support/dump.c
 
 failures=0
 
@@ -97,7 +97,7 @@ run_unit() {
     name="$1"
     shift
     # shellcheck disable=SC2086
-    "$cc" -Iinclude $cflags -o "$build_dir/$name" "tests/unit/$name.c" "$@"
+    "$cc" -Iinclude -Isrc/frontend -Isrc/backend $cflags -o "$build_dir/$name" "tests/unit/$name.c" "$@"
     if "$build_dir/$name" >"$build_dir/$name.log" 2>&1; then
         # The summary, not the last line: provoked diagnostics interleave.
         grep -E "checks passed|check\(s\) failed" "$build_dir/$name.log" | tail -1
@@ -107,9 +107,9 @@ run_unit() {
     fi
 }
 
-run_unit test_type src/type.c
-run_unit test_lexer src/lexer.c src/diag.c
-run_unit test_cli src/cli.c
+run_unit test_type src/analysis/type.c src/support/mem.c
+run_unit test_lexer src/frontend/lexer.c src/support/diag.c src/support/mem.c src/support/file.c
+run_unit test_cli src/support/cli.c
 
 # Compare a produced file against its golden copy, or refresh the golden copy
 # when UPDATE_GOLDEN=1.

@@ -17,18 +17,31 @@ integer-returning functions.
 |   |-- preprocess.h
 |   |-- symbol.h
 |   `-- type.h
-|-- src/              Compiler implementation
+|-- src/              Compiler implementation, grouped by pipeline stage
 |   |-- main.c        CLI entry point
-|   |-- preprocess.c  Directives, macro expansion, #include
-|   |-- lexer.c       Tokenizer
-|   |-- parser.c      Recursive descent parser and AST allocation
-|   |-- semantic.c    Name, scope, type, and function-call validation
-|   |-- type.c        Type representation, sizes, and struct layout
-|   |-- symbol.c      Storage identities and stack frame layout
-|   |-- diag.c        Diagnostics, error recovery, and warnings
-|   |-- cli.c         Command-line option parsing
-|   |-- dump.c        Token and syntax-tree debug output
-|   `-- codegen.c     Assembly generator
+|   |-- frontend/     Source text to syntax tree
+|   |   |-- preprocess.c   Directives, macro expansion, #include
+|   |   |-- lexer.c        Tokenizer
+|   |   |-- parser.c       Shared: recovery, typedefs, enums, declarators
+|   |   |-- parser_decl.c  Declarations
+|   |   |-- parser_stmt.c  Statements
+|   |   `-- parser_expr.c  Expressions, one function per precedence level
+|   |-- analysis/     Names, types, and storage
+|   |   |-- semantic.c     Name, scope, type, and call validation
+|   |   |-- type.c         Type representation, sizes, struct layout
+|   |   `-- symbol.c       Storage identities and stack frame layout
+|   |-- backend/      Syntax tree to assembly
+|   |   |-- codegen.c      Emitter context, prologue, entry point
+|   |   |-- codegen_emit.c The instruction layer
+|   |   |-- codegen_data.c Globals, strings, floating constants
+|   |   |-- codegen_stmt.c Control flow
+|   |   `-- codegen_expr.c Values, addresses, and the call sequence
+|   `-- support/      Used by every stage
+|       |-- diag.c         Diagnostics, error recovery, warnings
+|       |-- cli.c          Command-line option parsing
+|       |-- dump.c         Token and syntax-tree debug output
+|       |-- mem.c          Allocation that cannot fail, growable arrays
+|       `-- file.c         Reading a whole file
 |-- examples/         Source examples and reference assembly
 |   |-- sample.c
 |   |-- sample.asm

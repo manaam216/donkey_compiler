@@ -6,6 +6,7 @@
 #include "defs.h"
 #include "decl.h"
 #include "diag.h"
+#include "support/mem.h"
 
 static const char *lexer_source_path;
 static int current_line;
@@ -543,16 +544,16 @@ void lex(FILE *infile, const char *source_path, struct token **tokens, int *toke
     *tokens = NULL;
     *token_count = 0;
 
+    /*
+     * The buffer form is what the preprocessor uses; this remains for callers
+     * that already hold an open stream.
+     */
     if (fseek(infile, 0, SEEK_END) != 0 || (size = ftell(infile)) < 0) {
         return;
     }
     rewind(infile);
 
-    text = malloc((size_t)size + 1);
-    if (!text) {
-        fprintf(stderr, "Out of memory reading %s\n", source_path);
-        exit(EXIT_FAILURE);
-    }
+    text = xmalloc((size_t)size + 1, "source text");
     read = fread(text, 1, (size_t)size, infile);
     text[read] = '\0';
 

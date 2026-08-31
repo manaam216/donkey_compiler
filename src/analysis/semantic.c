@@ -7,6 +7,7 @@
 #include "type.h"
 #include "symbol.h"
 #include "diag.h"
+#include "support/mem.h"
 
 struct global_symbol {
     const char *name;
@@ -97,30 +98,6 @@ struct sema_ctx {
 static void semantic_error_at(struct sema_ctx *ctx, struct ast_node *node,
     const char *format, ...);
 
-/*
- * Grow *items to hold at least one more element. Allocation failure is fatal:
- * there is no useful way to continue analysis without a symbol table.
- */
-static void ensure_capacity(void **items, int count, int *capacity,
-    size_t item_size)
-{
-    void *grown;
-    int next;
-
-    if (count < *capacity) {
-        return;
-    }
-
-    next = *capacity ? *capacity * 2 : 64;
-    grown = realloc(*items, (size_t)next * item_size);
-    if (!grown) {
-        fprintf(stderr, "Out of memory while growing the symbol table\n");
-        exit(EXIT_FAILURE);
-    }
-
-    *items = grown;
-    *capacity = next;
-}
 
 static const char *semantic_type_name(CType type)
 {
@@ -274,8 +251,8 @@ static void add_struct(struct sema_ctx *ctx, struct ast_node *node)
         semantic_error_at(ctx, node, "duplicate struct definition '%s'", node->value);
         return;
     }
-    ensure_capacity((void **)&ctx->structs, ctx->struct_count,
-        &ctx->struct_capacity, sizeof(*ctx->structs));
+    grow_array((void **)&ctx->structs, ctx->struct_count,
+        &ctx->struct_capacity, sizeof(*ctx->structs), 64, "the symbol table");
     memset(&ctx->structs[ctx->struct_count], 0, sizeof(ctx->structs[0]));
     struct_type = ty_struct(node->value);
     node->ty = struct_type;
@@ -425,8 +402,8 @@ static void add_global(struct sema_ctx *ctx, struct ast_node *node)
         semantic_error_at(ctx, node, "duplicate top-level declaration of '%s'", name);
         return;
     }
-    ensure_capacity((void **)&ctx->globals, ctx->global_count,
-        &ctx->global_capacity, sizeof(*ctx->globals));
+    grow_array((void **)&ctx->globals, ctx->global_count,
+        &ctx->global_capacity, sizeof(*ctx->globals), 64, "the symbol table");
     /*
      * The table grows with realloc, so a fresh entry holds whatever was in that
      * memory. Clearing it means a field nobody sets here still reads as zero --
@@ -492,8 +469,8 @@ static void add_local(struct sema_ctx *ctx, struct ast_node *node, CType type)
         semantic_error_at(ctx, node, "duplicate declaration of '%s'", name);
         return;
     }
-    ensure_capacity((void **)&ctx->locals, ctx->local_count,
-        &ctx->local_capacity, sizeof(*ctx->locals));
+    grow_array((void **)&ctx->locals, ctx->local_count,
+        &ctx->local_capacity, sizeof(*ctx->locals), 64, "the symbol table");
     memset(&ctx->locals[ctx->local_count], 0, sizeof(ctx->locals[0]));
     if (node->struct_name && find_struct(ctx, node->struct_name) < 0) {
         semantic_error_at(ctx, node, "unknown struct type '%s'", node->struct_name);

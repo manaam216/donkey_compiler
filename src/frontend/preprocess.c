@@ -5,6 +5,8 @@
 #include "decl.h"
 #include "diag.h"
 #include "preprocess.h"
+#include "support/mem.h"
+#include "support/file.h"
 
 #define MAX_INCLUDE_DEPTH 64
 
@@ -72,11 +74,8 @@ static void list_reserve(struct token_list *list, int needed)
     while (list->capacity < list->count + needed) {
         list->capacity = list->capacity ? list->capacity * 2 : 64;
     }
-    list->items = realloc(list->items, (size_t)list->capacity * sizeof(*list->items));
-    if (!list->items) {
-        fprintf(stderr, "Out of memory in the preprocessor\n");
-        exit(EXIT_FAILURE);
-    }
+    list->items = xrealloc(list->items,
+        (size_t)list->capacity * sizeof(*list->items), "a token list");
 }
 
 /* Tokens own their text, so copies duplicate it. */
@@ -128,12 +127,8 @@ static const char *intern_path(const char *path)
 
     if (state.path_count >= state.path_capacity) {
         state.path_capacity = state.path_capacity ? state.path_capacity * 2 : 16;
-        state.paths = realloc(state.paths,
-            (size_t)state.path_capacity * sizeof(*state.paths));
-        if (!state.paths) {
-            fprintf(stderr, "Out of memory in the preprocessor\n");
-            exit(EXIT_FAILURE);
-        }
+        state.paths = xrealloc(state.paths,
+            (size_t)state.path_capacity * sizeof(*state.paths), "preprocessor state");
     }
     state.paths[state.path_count] = strdup(path);
     return state.paths[state.path_count++];
@@ -180,12 +175,8 @@ static struct pp_macro *add_macro(const char *name)
 
     if (state.macro_count >= state.macro_capacity) {
         state.macro_capacity = state.macro_capacity ? state.macro_capacity * 2 : 64;
-        state.macros = realloc(state.macros,
-            (size_t)state.macro_capacity * sizeof(*state.macros));
-        if (!state.macros) {
-            fprintf(stderr, "Out of memory in the preprocessor\n");
-            exit(EXIT_FAILURE);
-        }
+        state.macros = xrealloc(state.macros,
+            (size_t)state.macro_capacity * sizeof(*state.macros), "preprocessor state");
     }
 
     memset(&state.macros[state.macro_count], 0, sizeof(state.macros[0]));
@@ -218,11 +209,7 @@ static char *stringize(const struct token *tokens, int count)
         size += (tokens[i].value ? strlen(tokens[i].value) : 0) + 1;
     }
 
-    text = malloc(size);
-    if (!text) {
-        fprintf(stderr, "Out of memory in the preprocessor\n");
-        exit(EXIT_FAILURE);
-    }
+    text = xmalloc(size, "preprocessor state");
     text[0] = '\0';
 
     for (i = 0; i < count; i++) {
@@ -271,11 +258,7 @@ static void paste_tokens(struct token_list *out, const struct token *right)
     left = &out->items[out->count - 1];
     length = (left->value ? strlen(left->value) : 0) +
              (right->value ? strlen(right->value) : 0) + 1;
-    joined = malloc(length);
-    if (!joined) {
-        fprintf(stderr, "Out of memory in the preprocessor\n");
-        exit(EXIT_FAILURE);
-    }
+    joined = xmalloc(length, "preprocessor state");
     snprintf(joined, length, "%s%s", left->value ? left->value : "",
         right->value ? right->value : "");
 
@@ -312,11 +295,7 @@ static void collect_arguments(const struct token *tokens, int count, int *index,
     int depth = 0;
     int n;
 
-    args = calloc((size_t)capacity, sizeof(*args));
-    if (!args) {
-        fprintf(stderr, "Out of memory in the preprocessor\n");
-        exit(EXIT_FAILURE);
-    }
+    args = xcalloc((size_t)capacity, sizeof(*args), "preprocessor state");
 
     (*index)++;                          /* step over the open parenthesis */
     n = 1;
@@ -338,11 +317,7 @@ static void collect_arguments(const struct token *tokens, int count, int *index,
                 int old = capacity;
 
                 capacity *= 2;
-                args = realloc(args, (size_t)capacity * sizeof(*args));
-                if (!args) {
-                    fprintf(stderr, "Out of memory in the preprocessor\n");
-                    exit(EXIT_FAILURE);
-                }
+                args = xrealloc(args, (size_t)capacity * sizeof(*args), "preprocessor state");
                 memset(&args[old], 0, (size_t)(capacity - old) * sizeof(*args));
             }
             n++;
@@ -786,34 +761,6 @@ static long evaluate_condition(const struct token *tokens, int count)
 static void process_tokens(const struct token *tokens, int count,
     const char *path, struct token_list *out);
 
-static char *read_file(const char *path, size_t *length)
-{
-    FILE *file = fopen(path, "rb");
-    char *text;
-    long size;
-    size_t read;
-
-    if (!file) {
-        return NULL;
-    }
-    if (fseek(file, 0, SEEK_END) != 0 || (size = ftell(file)) < 0) {
-        fclose(file);
-        return NULL;
-    }
-    rewind(file);
-
-    text = malloc((size_t)size + 1);
-    if (!text) {
-        fclose(file);
-        fprintf(stderr, "Out of memory in the preprocessor\n");
-        exit(EXIT_FAILURE);
-    }
-    read = fread(text, 1, (size_t)size, file);
-    text[read] = '\0';
-    *length = read;
-    fclose(file);
-    return text;
-}
 
 /* The directory part of a path, so a quoted include can be looked up beside it. */
 static void directory_of(const char *path, char *buffer, size_t size)
@@ -850,12 +797,8 @@ static void mark_once(const char *path)
 {
     if (state.once_count >= state.once_capacity) {
         state.once_capacity = state.once_capacity ? state.once_capacity * 2 : 16;
-        state.once_files = realloc(state.once_files,
-            (size_t)state.once_capacity * sizeof(*state.once_files));
-        if (!state.once_files) {
-            fprintf(stderr, "Out of memory in the preprocessor\n");
-            exit(EXIT_FAILURE);
-        }
+        state.once_files = xrealloc(state.once_files,
+            (size_t)state.once_capacity * sizeof(*state.once_files), "preprocessor state");
     }
     state.once_files[state.once_count++] = strdup(path);
 }
@@ -885,7 +828,7 @@ static char *resolve_include(const char *name, int angled, const char *from_path
             char *text;
 
             snprintf(candidate, sizeof(candidate), "%s/%s", directory, name);
-            text = read_file(candidate, &unused);
+            text = read_whole_file(candidate, &unused);
             if (text) {
                 free(text);
                 return strdup(candidate);
@@ -902,7 +845,7 @@ static char *resolve_include(const char *name, int angled, const char *from_path
         }
         snprintf(candidate, sizeof(candidate), "%s/%s",
             state.include_paths[i], name);
-        text = read_file(candidate, &unused);
+        text = read_whole_file(candidate, &unused);
         if (text) {
             free(text);
             return strdup(candidate);
@@ -929,7 +872,7 @@ static void include_file(const char *path, SourceLocation location,
         return;
     }
 
-    text = read_file(path, &length);
+    text = read_whole_file(path, &length);
     if (!text) {
         diag_at(DIAG_ERROR, location, "cannot read '%s'", path);
         return;
@@ -988,12 +931,8 @@ static void define_macro(const struct token *tokens, int start, int end)
 
         while (i < end && tokens[i].type != T_CLOSEPAREN) {
             if (tokens[i].type == T_IDENTIFIER) {
-                macro->params = realloc(macro->params,
-                    (size_t)(macro->param_count + 1) * sizeof(*macro->params));
-                if (!macro->params) {
-                    fprintf(stderr, "Out of memory in the preprocessor\n");
-                    exit(EXIT_FAILURE);
-                }
+                macro->params = xrealloc(macro->params,
+                    (size_t)(macro->param_count + 1) * sizeof(*macro->params), "preprocessor state");
                 macro->params[macro->param_count++] = strdup(tokens[i].value);
             } else if (tokens[i].type != T_COMMA) {
                 diag_at(DIAG_ERROR, tokens[i].location,
@@ -1324,7 +1263,7 @@ void preprocess_file(const char *path, const struct pp_options *options,
         }
     }
 
-    text = read_file(path, &length);
+    text = read_whole_file(path, &length);
     if (!text) {
         SourceLocation location;
 

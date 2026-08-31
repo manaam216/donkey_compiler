@@ -1,9 +1,9 @@
 CC ?= gcc
 CFLAGS ?= -Wall -Wextra -g
-CPPFLAGS ?= -Iinclude
+CPPFLAGS ?= -Iinclude -Isrc/frontend -Isrc/backend
 BUILD_DIR ?= build
 TARGET ?= $(BUILD_DIR)/donkey
-SRC = src/main.c src/lexer.c src/parser.c src/semantic.c src/codegen.c src/type.c src/symbol.c src/diag.c src/dump.c src/cli.c src/preprocess.c
+SRC = src/main.c src/frontend/lexer.c src/frontend/preprocess.c src/frontend/parser.c src/frontend/parser_decl.c src/frontend/parser_stmt.c src/frontend/parser_expr.c src/analysis/semantic.c src/analysis/type.c src/analysis/symbol.c src/backend/codegen.c src/backend/codegen_emit.c src/backend/codegen_data.c src/backend/codegen_stmt.c src/backend/codegen_expr.c src/support/mem.c src/support/file.c src/support/diag.c src/support/cli.c src/support/dump.c
 
 .PHONY: all clean sample test
 
