@@ -17,18 +17,37 @@ integer-returning functions.
 |   |-- preprocess.h
 |   |-- symbol.h
 |   `-- type.h
-|-- src/              Compiler implementation
+|-- src/              Compiler implementation, grouped by pipeline stage
 |   |-- main.c        CLI entry point
-|   |-- preprocess.c  Directives, macro expansion, #include
-|   |-- lexer.c       Tokenizer
-|   |-- parser.c      Recursive descent parser and AST allocation
-|   |-- semantic.c    Name, scope, type, and function-call validation
-|   |-- type.c        Type representation, sizes, and struct layout
-|   |-- symbol.c      Storage identities and stack frame layout
-|   |-- diag.c        Diagnostics, error recovery, and warnings
-|   |-- cli.c         Command-line option parsing
-|   |-- dump.c        Token and syntax-tree debug output
-|   `-- codegen.c     Assembly generator
+|   |-- frontend/     Source text to syntax tree
+|   |   |-- preprocess.c   Token lists, path interning, the directive loop
+|   |   |-- pp_macro.c     The macro table and macro expansion
+|   |   |-- pp_cond.c      #if expression evaluation
+|   |   |-- pp_include.c   Header lookup, #pragma once, nested includes
+|   |   |-- lexer.c        Tokenizer
+|   |   |-- parser.c       Shared: recovery, typedefs, enums, declarators
+|   |   |-- parser_decl.c  Declarations
+|   |   |-- parser_stmt.c  Statements
+|   |   `-- parser_expr.c  Expressions, one function per precedence level
+|   |-- analysis/     Names, types, and storage
+|   |   |-- semantic.c     Diagnostics, shared lookups, the entry point
+|   |   |-- sema_scope.c   Struct, global, local, and parameter tables
+|   |   |-- sema_resolve.c Pass one: names, scopes, and storage
+|   |   |-- sema_type.c    Pass two: expression and statement types
+|   |   |-- type.c         Type representation, sizes, struct layout
+|   |   `-- symbol.c       Storage identities and stack frame layout
+|   |-- backend/      Syntax tree to assembly
+|   |   |-- codegen.c      Emitter context, prologue, entry point
+|   |   |-- codegen_emit.c The instruction layer
+|   |   |-- codegen_data.c Globals, strings, floating constants
+|   |   |-- codegen_stmt.c Control flow
+|   |   `-- codegen_expr.c Values, addresses, and the call sequence
+|   `-- support/      Used by every stage
+|       |-- diag.c         Diagnostics, error recovery, warnings
+|       |-- cli.c          Command-line option parsing
+|       |-- dump.c         Token and syntax-tree debug output
+|       |-- mem.c          Allocation that cannot fail, growable arrays
+|       `-- file.c         Reading a whole file
 |-- examples/         Source examples and reference assembly
 |   |-- sample.c
 |   |-- sample.asm
@@ -80,7 +99,7 @@ On Windows with MinGW GCC and no `make`, run:
 
 ```powershell
 New-Item -ItemType Directory -Force build
-gcc -Iinclude -Wall -Wextra -g -o build\donkey.exe src\main.c src\preprocess.c src\lexer.c src\parser.c src\semantic.c src\type.c src\symbol.c src\diag.c src\dump.c src\cli.c src\codegen.c
+gcc -Iinclude -Isrc/frontend -Isrc/analysis -Isrc/backend -Wall -Wextra -g -o build\donkey.exe src\main.c src\frontend\*.c src\analysis\*.c src\backend\*.c src\support\*.c
 ```
 
 ## Test

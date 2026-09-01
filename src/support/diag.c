@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "diag.h"
+#include "support/file.h"
 
 #define MAX_REPORTED_ERRORS 20
 
@@ -29,27 +30,6 @@ struct source_file {
 
 static struct source_file *source_files;
 
-static char *load_file(const char *path)
-{
-    FILE *file = fopen(path, "rb");
-    char *text = NULL;
-    long size;
-
-    if (!file) {
-        return NULL;
-    }
-    if (fseek(file, 0, SEEK_END) == 0 && (size = ftell(file)) >= 0) {
-        rewind(file);
-        text = malloc((size_t)size + 1);
-        if (text) {
-            size_t read = fread(text, 1, (size_t)size, file);
-
-            text[read] = '\0';
-        }
-    }
-    fclose(file);
-    return text;
-}
 
 static const char *source_text_for(const char *path)
 {
@@ -69,7 +49,7 @@ static const char *source_text_for(const char *path)
         return NULL;
     }
     entry->path = strdup(path);
-    entry->text = load_file(path);
+    entry->text = read_whole_file(path, NULL);
     entry->next = source_files;
     source_files = entry;
     return entry->text;
