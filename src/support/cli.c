@@ -9,12 +9,16 @@
 enum {
     OPT_DUMP_TOKENS = 1000,
     OPT_DUMP_AST,
+    OPT_DUMP_IR,
+    OPT_DUMP_SSA,
     OPT_VERSION
 };
 
 static const struct option long_options[] = {
     { "dump-tokens", no_argument,       NULL, OPT_DUMP_TOKENS },
     { "dump-ast",    no_argument,       NULL, OPT_DUMP_AST },
+    { "dump-ir",     no_argument,       NULL, OPT_DUMP_IR },
+    { "dump-ssa",    no_argument,       NULL, OPT_DUMP_SSA },
     { "verbose",     no_argument,       NULL, 'v' },
     { "help",        no_argument,       NULL, 'h' },
     { "version",     no_argument,       NULL, OPT_VERSION },
@@ -58,8 +62,7 @@ static int reject_unimplemented(const char *argument)
     } pending[] = {
         { "-O", "there is no optimiser yet" },
         { "-g", "debug information is not generated yet" },
-        { "-c", "Donkey emits assembly; it does not assemble or link" },
-        { "--dump-ir", "there is no intermediate representation yet" }
+        { "-c", "Donkey emits assembly; it does not assemble or link" }
     };
     size_t i;
 
@@ -155,6 +158,12 @@ int cli_parse(int argc, char *argv[], struct options *options, int *should_exit)
                 break;
             case OPT_DUMP_AST:
                 options->dump_ast = 1;
+                break;
+            case OPT_DUMP_IR:
+                options->dump_ir = 1;
+                break;
+            case OPT_DUMP_SSA:
+                options->dump_ssa = 1;
                 break;
             case 'v':
                 options->verbose = 1;

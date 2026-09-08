@@ -78,7 +78,7 @@ cflags="${CFLAGS:--Wall -Wextra -g}"
 
 # shellcheck disable=SC2086 # cflags is a deliberate word-split flag list
 "$cc" -Iinclude -Isrc/frontend -Isrc/analysis -Isrc/backend $cflags -o "$compiler" \
-    src/main.c src/frontend/lexer.c src/frontend/preprocess.c src/frontend/pp_macro.c src/frontend/pp_cond.c src/frontend/pp_include.c src/frontend/parser.c src/frontend/parser_decl.c src/frontend/parser_stmt.c src/frontend/parser_expr.c src/analysis/semantic.c src/analysis/sema_scope.c src/analysis/sema_resolve.c src/analysis/sema_type.c src/analysis/type.c src/analysis/symbol.c src/backend/codegen.c src/backend/codegen_emit.c src/backend/codegen_data.c src/backend/codegen_stmt.c src/backend/codegen_expr.c src/support/mem.c src/support/file.c src/support/diag.c src/support/cli.c src/support/dump.c
+    src/main.c src/frontend/lexer.c src/frontend/preprocess.c src/frontend/pp_macro.c src/frontend/pp_cond.c src/frontend/pp_include.c src/frontend/parser.c src/frontend/parser_decl.c src/frontend/parser_stmt.c src/frontend/parser_expr.c src/analysis/semantic.c src/analysis/sema_scope.c src/analysis/sema_resolve.c src/analysis/sema_type.c src/analysis/type.c src/analysis/symbol.c src/ir/ir.c src/ir/lower.c src/ir/cfg.c src/ir/dom.c src/ir/ssa.c src/ir/irdump.c src/ir/verify.c src/backend/codegen.c src/backend/codegen_emit.c src/backend/codegen_data.c src/backend/codegen_stmt.c src/backend/codegen_expr.c src/support/mem.c src/support/file.c src/support/diag.c src/support/cli.c src/support/dump.c
 
 failures=0
 
@@ -110,6 +110,7 @@ run_unit() {
 run_unit test_type src/analysis/type.c src/support/mem.c
 run_unit test_lexer src/frontend/lexer.c src/support/diag.c src/support/mem.c src/support/file.c
 run_unit test_cli src/support/cli.c
+run_unit test_ir src/ir/ir.c src/ir/cfg.c src/ir/dom.c src/ir/ssa.c     src/ir/irdump.c src/ir/verify.c src/analysis/type.c src/support/mem.c
 
 # Compare a produced file against its golden copy, or refresh the golden copy
 # when UPDATE_GOLDEN=1.
@@ -176,6 +177,33 @@ while read -r source name; do
 
     echo "  ok  $name"
 done < "$build_dir/programs.txt"
+
+echo "== intermediate representation =="
+
+# Every example is lowered and put through the verifier, in both forms. The
+# verifier is the assertion: it checks that each block ends in a terminator and
+# that every value is used only where its definition is guaranteed to have run,
+# which is the property the SSA construction exists to establish. A non-zero
+# exit means it found something.
+for source in examples/*.c; do
+    for mode in --dump-ir --dump-ssa; do
+        if "$compiler" "$mode" "$source" >"$build_dir/ir.txt" 2>"$build_dir/ir.err"; then
+            :
+        else
+            fail "$mode $source"
+            head -10 "$build_dir/ir.err" >&2
+        fi
+    done
+done
+echo "  ok  every example lowers to verified IR"
+
+# One program's SSA is kept as a golden file. The verifier says the IR is well
+# formed; this says it is the IR we meant -- that the phis land where the
+# dominance frontier puts them and that promotion took the loads back out.
+"$compiler" --dump-ssa examples/control_flow.c >"$build_dir/control_flow.ssa" 2>&1
+if check_golden "$build_dir/control_flow.ssa" tests/golden/control_flow.ssa     "control_flow.c SSA"; then
+    echo "  ok  control_flow.c SSA matches its golden form"
+fi
 
 echo "== negative tests =="
 

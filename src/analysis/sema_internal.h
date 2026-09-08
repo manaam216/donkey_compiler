@@ -119,7 +119,6 @@ int sema_find_struct_field(struct sema_ctx *ctx, int struct_index, const char *n
 CType semantic_type_from_name(const char *name);
 void semantic_error_at(struct sema_ctx *ctx, struct ast_node *node, const char *format, ...);
 int sema_count_list(struct ast_node *node, ASTNodeType list_type);
-struct ast_node *sema_initializer_items(struct ast_node *node);
 
 /* sema_scope.c -- the struct, global, local, and parameter tables. */
 struct Type *sema_resolve_type(struct sema_ctx *ctx, struct ast_node *node);

@@ -134,17 +134,6 @@ int sema_count_list(struct ast_node *node, ASTNodeType list_type)
     return count;
 }
 
-struct ast_node *sema_initializer_items(struct ast_node *node)
-{
-    if (!node || node->type != AST_INITIALIZER_LIST) {
-        return NULL;
-    }
-    if (!node->left || node->left->type == AST_INITIALIZER_LIST) {
-        return node->left;
-    }
-    return node;
-}
-
 int semantic_analyze(struct ast_node *ast, const char *source_path)
 {
     struct sema_ctx ctx_storage;

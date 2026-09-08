@@ -36,6 +36,14 @@ integer-returning functions.
 |   |   |-- sema_type.c    Pass two: expression and statement types
 |   |   |-- type.c         Type representation, sizes, struct layout
 |   |   `-- symbol.c       Storage identities and stack frame layout
+|   |-- ir/          Three-address IR in SSA form
+|   |   |-- ir.c           Blocks, values, instructions
+|   |   |-- lower.c        Syntax tree to IR; locals become frame slots
+|   |   |-- cfg.c          Predecessors, reverse postorder, reachability
+|   |   |-- dom.c          Dominators and dominance frontiers
+|   |   |-- ssa.c          Slot promotion and phi insertion
+|   |   |-- irdump.c       The textual form
+|   |   `-- verify.c       The invariants every pass may assume
 |   |-- backend/      Syntax tree to assembly
 |   |   |-- codegen.c      Emitter context, prologue, entry point
 |   |   |-- codegen_emit.c The instruction layer
@@ -186,12 +194,13 @@ Run `./build/donkey --help` for the full list. The options that exist are:
 | `-w` | Suppress warnings |
 | `--dump-tokens` | Print the token stream and stop |
 | `--dump-ast` | Print the annotated syntax tree and stop |
+| `--dump-ir` | Print the IR as lowered, with locals still in memory, and stop |
+| `--dump-ssa` | Print the IR in SSA form, with phis, and stop |
 | `-v`, `--verbose` | Report each stage as it runs |
 | `-h`, `--help` | Usage |
 | `--version` | Version |
 
-Options belonging to stages that do not exist yet -- `-O`, `-g`, `-c`,
-`--dump-ir` -- are refused with an explanation rather than accepted
+Options belonging to stages that do not exist yet -- `-O`, `-g`, `-c` -- are refused with an explanation rather than accepted
 and ignored, so a build never quietly does something other than what was asked:
 
 ```text

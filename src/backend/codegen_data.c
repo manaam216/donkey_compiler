@@ -47,17 +47,6 @@ int struct_field_offset(struct Type *ty, const char *field_name)
     return member ? member->offset : 0;
 }
 
-struct ast_node *initializer_items(struct ast_node *node)
-{
-    if (!node || node->type != AST_INITIALIZER_LIST) {
-        return NULL;
-    }
-    if (!node->left || node->left->type == AST_INITIALIZER_LIST) {
-        return node->left;
-    }
-    return node;
-}
-
 void add_global_node(struct ast_node *node)
 {
     int i;

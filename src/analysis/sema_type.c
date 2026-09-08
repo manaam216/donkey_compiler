@@ -192,7 +192,7 @@ static CType check_expression_type_inner(struct sema_ctx *ctx, struct ast_node *
              * that tracks the frame. Allocating here instead would hand out
              * offsets already given to locals.
              */
-            for (item = sema_initializer_items(node->left); item; item = item->right) {
+            for (item = initializer_items(node->left); item; item = item->right) {
                 check_expression_type(ctx, &item->left);
             }
             return node->data_type;
@@ -480,7 +480,7 @@ static void check_initializer_list_types(struct sema_ctx *ctx, struct ast_node *
         int struct_index = sema_find_struct(ctx, declaration->struct_name);
         int field = 0;
 
-        for (item = sema_initializer_items(declaration->left); item; item = item->right) {
+        for (item = initializer_items(declaration->left); item; item = item->right) {
             if (item->left && item->left->designator_field) {
                 field = sema_find_struct_field(ctx, struct_index,
                     item->left->designator_field);
@@ -505,7 +505,7 @@ static void check_initializer_list_types(struct sema_ctx *ctx, struct ast_node *
         return;
     }
 
-    for (item = sema_initializer_items(declaration->left); item; item = item->right) {
+    for (item = initializer_items(declaration->left); item; item = item->right) {
         /* A designator places its element; the ones after it follow on. */
         if (item->left && item->left->designator_index >= 0) {
             index = item->left->designator_index;

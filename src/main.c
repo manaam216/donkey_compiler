@@ -8,6 +8,7 @@
 #include "dump.h"
 #include "cli.h"
 #include "preprocess.h"
+#include "ir.h"
 
 /*
  * Each stage reports everything it finds rather than stopping at the first
@@ -42,10 +43,12 @@ int main(int argc, char *argv[])
 {
     struct options options;
     struct pp_options pp_options;
+    int ir_built = 0;
     struct token *tokens = NULL;
     int token_count = 0;
     int token_index = 0;
     struct ast_node *ast = NULL;
+    struct ir_program ir;
     int should_exit = 0;
     int status;
 
@@ -123,6 +126,50 @@ int main(int argc, char *argv[])
         goto done_ast;
     }
 
+    /*
+     * The IR is built on request rather than on every compile. Code generation
+     * still runs straight off the syntax tree; until instruction selection
+     * moves onto the IR, building it unconditionally would cost every user of
+     * the compiler time for a result nothing reads.
+     */
+    if (options.dump_ir || options.dump_ssa) {
+        struct ir_func *func;
+
+        if (options.verbose) {
+            fprintf(stderr, "lowering to IR\n");
+        }
+        ir.first = NULL;
+        ir.last = NULL;
+        ir_built = 1;
+        ir_lower_program(&ir, ast);
+
+        for (func = ir.first; func; func = func->next) {
+            ir_analyze_cfg(func);
+            ir_compute_dominators(func);
+            ir_compute_frontiers(func);
+            if (options.dump_ssa) {
+                ir_build_ssa(func);
+
+                /*
+                 * Promotion deletes blocks' worth of loads and stores and adds
+                 * phis, so the predecessor lists and the dominator tree are
+                 * rebuilt before anything reads them again.
+                 */
+                ir_analyze_cfg(func);
+                ir_compute_dominators(func);
+                ir_compute_frontiers(func);
+            }
+        }
+
+        if (ir_verify_program(&ir, stderr) > 0) {
+            status = EXIT_FAILURE;
+            goto done_ast;
+        }
+        ir_dump_program(&ir, stdout);
+        status = EXIT_SUCCESS;
+        goto done_ast;
+    }
+
     if (options.verbose) {
         fprintf(stderr, "generating %s\n", options.output);
     }
@@ -137,6 +184,9 @@ int main(int argc, char *argv[])
     status = EXIT_SUCCESS;
 
 done_ast:
+    if (ir_built) {
+        ir_program_free(&ir);
+    }
     free_ast_node(ast);
 done_tokens:
     free_tokens(tokens, token_count);

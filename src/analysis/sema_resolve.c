@@ -23,7 +23,7 @@ void sema_analyze_expression(struct sema_ctx *ctx, struct ast_node *node)
         case AST_SIZEOF:
             return;
         case AST_INITIALIZER_LIST:
-            for (struct ast_node *item = sema_initializer_items(node); item; item = item->right) {
+            for (struct ast_node *item = initializer_items(node); item; item = item->right) {
                 sema_analyze_expression(ctx, item->left);
             }
             return;
@@ -49,7 +49,7 @@ void sema_analyze_expression(struct sema_ctx *ctx, struct ast_node *node)
                 }
             }
 
-            for (item = sema_initializer_items(node->left); item; item = item->right) {
+            for (item = initializer_items(node->left); item; item = item->right) {
                 sema_analyze_expression(ctx, item->left);
             }
             return;
@@ -333,7 +333,7 @@ static int is_constant_expression(struct ast_node *node)
         case AST_SIZEOF:
             return 1;
         case AST_INITIALIZER_LIST:
-            for (struct ast_node *item = sema_initializer_items(node); item; item = item->right) {
+            for (struct ast_node *item = initializer_items(node); item; item = item->right) {
                 if (!is_constant_expression(item->left)) {
                     return 0;
                 }

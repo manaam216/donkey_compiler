@@ -785,3 +785,24 @@ void free_ast_node(struct ast_node *node)
         free(node);
     }
 }
+
+/*
+ * The elements of a brace initializer.
+ *
+ * The parser represents `{1, 2}` as a list node whose left is the first
+ * element, but `{{1}, {2}}` as a list of lists -- so the caller cannot simply
+ * take node->left and walk right. This looks through the outer node and hands
+ * back whichever of the two the list actually is. Three passes ask the
+ * question, which is why it lives here with the shape it is asking about
+ * rather than in each of them.
+ */
+struct ast_node *initializer_items(struct ast_node *node)
+{
+    if (!node || node->type != AST_INITIALIZER_LIST) {
+        return NULL;
+    }
+    if (!node->left || node->left->type == AST_INITIALIZER_LIST) {
+        return node->left;
+    }
+    return node;
+}

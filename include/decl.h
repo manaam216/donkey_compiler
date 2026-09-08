@@ -13,6 +13,13 @@ struct ast_node* create_ast_node(ASTNodeType type, char *value, struct ast_node 
 struct ast_node* create_ast_node_at(ASTNodeType type, char *value, struct ast_node *left, struct ast_node *right, SourceLocation location);
 void free_ast_node(struct ast_node *node);
 
+/*
+ * The elements of a brace initializer, looking through the outer list node.
+ * Semantic analysis, code generation and IR lowering all walk initializers and
+ * all need the same answer.
+ */
+struct ast_node *initializer_items(struct ast_node *node);
+
 struct ast_node* parse_program(struct token *tokens, int *token_index, const char *source_path);
 
 /* Discard typedef names and enum constants between translation units. */

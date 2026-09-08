@@ -139,7 +139,6 @@ void generate_lvalue_address(struct cg_ctx *ctx, struct ast_node *node, FILE *ou
 void generate_program(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
 void generate_stack_note(FILE *output);
 void generate_statement(struct cg_ctx *ctx, struct ast_node *node, FILE *output);
-struct ast_node *initializer_items(struct ast_node *node);
 int intern_fp_constant(const char *text, int is_float);
 int is_frame_symbol(struct Symbol *sym);
 int is_unsigned_type(CType type);

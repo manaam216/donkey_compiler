@@ -29,6 +29,14 @@ struct options {
 
     int dump_tokens;
     int dump_ast;
+
+    /*
+     * --dump-ir shows the IR as lowering left it, with locals still in memory;
+     * --dump-ssa shows it after promotion, with phis. Having both is what makes
+     * the SSA pass reviewable: the difference between them is what it did.
+     */
+    int dump_ir;
+    int dump_ssa;
     int verbose;
 
     int warnings_are_errors;
