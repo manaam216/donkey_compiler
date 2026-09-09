@@ -146,7 +146,16 @@ struct ir_instr {
      */
     struct ir_block **phi_blocks;
 
-    long imm;                   /* IR_CONST, IR_MEMCPY size */
+    /*
+     * IR_CONST's value, IR_MEMCPY's size, IR_PARAM's index.
+     *
+     * long long rather than long: the target is LP64, so a `long` constant in
+     * the source is 64 bits, and the compiler itself may be built as a 32-bit
+     * program where a host long is only 32. Folding constants through a host
+     * type that is narrower than the target's would quietly produce wrong
+     * numbers.
+     */
+    long long imm;
     char *text;                 /* IR_CONST_FP, IR_STR */
     struct Symbol *sym;         /* IR_GLOBAL, IR_ALLOCA, IR_PARAM */
     struct Type *mem_type;      /* IR_LOAD, IR_STORE: the type in memory */
@@ -261,6 +270,58 @@ struct ir_value *ir_set_dst(struct ir_func *func, struct ir_instr *instr,
     struct Type *ty);
 
 void ir_remove(struct ir_instr *instr);
+
+/*
+ * Take an instruction out of its block without retiring it, for a pass that is
+ * about to put it somewhere else. ir_remove would also add it to the block's
+ * list of dead instructions, and one that is both dead and live is freed twice.
+ */
+void ir_unlink(struct ir_instr *instr);
+
+/*
+ * Insert before an existing instruction, for a pass that needs to compute
+ * something the instruction it is rewriting will use -- a shift count, say,
+ * in place of a multiply.
+ */
+struct ir_instr *ir_emit_before(struct ir_instr *at, IROp op);
+
+/*
+ * Point every use of one value at another, and report how many were changed.
+ *
+ * Values are referred to by pointer and there are no use lists, so this scans
+ * the function. That is the trade the IR makes: a rewrite costs a walk, but
+ * nothing has to keep a second structure correct, and a stale use list is a
+ * class of bug that cannot happen.
+ */
+int ir_replace_uses(struct ir_func *func, struct ir_value *from,
+    struct ir_value *to);
+
+/*
+ * Count the uses of every value into an array indexed by value id, which must
+ * have room for func->value_count entries.
+ */
+void ir_count_uses(struct ir_func *func, int *counts);
+
+/*
+ * Whether removing an instruction would change what the program does. A store,
+ * a call, or a terminator is kept even when nothing reads its result; pure
+ * arithmetic is not.
+ */
+int ir_has_side_effects(struct ir_instr *instr);
+
+/*
+ * Whether two instructions with the same opcode and operands must produce the
+ * same value. Loads are not pure -- memory can change between them -- and
+ * neither is anything with a side effect.
+ */
+int ir_is_pure(struct ir_instr *instr);
+
+/*
+ * Drop phi arguments that arrive from blocks which are no longer predecessors.
+ * Any pass that redirects or deletes an edge must call this, after
+ * ir_analyze_cfg, or a phi will name an edge that does not exist.
+ */
+void ir_fix_phis(struct ir_func *func);
 
 /* The terminator of a block, or NULL while it is still being built. */
 struct ir_instr *ir_terminator(struct ir_block *block);

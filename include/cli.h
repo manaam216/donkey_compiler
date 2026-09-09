@@ -37,6 +37,12 @@ struct options {
      */
     int dump_ir;
     int dump_ssa;
+
+    /*
+     * -O0 through -O3. Zero is not "the passes with their flags off" but no
+     * passes at all, so the unoptimised IR stays available to compare against.
+     */
+    int optimise;
     int verbose;
 
     int warnings_are_errors;

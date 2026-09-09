@@ -44,6 +44,13 @@ integer-returning functions.
 |   |   |-- ssa.c          Slot promotion and phi insertion
 |   |   |-- irdump.c       The textual form
 |   |   `-- verify.c       The invariants every pass may assume
+|   |-- opt/         Optimisation passes over the IR
+|   |   |-- opt.c          The pipeline, run to a fixed point
+|   |   |-- fold.c         Constants, identities, strength reduction
+|   |   |-- simplify.c     Branch straightening and block merging
+|   |   |-- dce.c          Dead code and copy propagation
+|   |   |-- cse.c          Global value numbering
+|   |   `-- licm.c         Loop-invariant code motion
 |   |-- backend/      Syntax tree to assembly
 |   |   |-- codegen.c      Emitter context, prologue, entry point
 |   |   |-- codegen_emit.c The instruction layer
@@ -196,16 +203,18 @@ Run `./build/donkey --help` for the full list. The options that exist are:
 | `--dump-ast` | Print the annotated syntax tree and stop |
 | `--dump-ir` | Print the IR as lowered, with locals still in memory, and stop |
 | `--dump-ssa` | Print the IR in SSA form, with phis, and stop |
+| `-O<0-3>` | Optimise the IR; `-O0` runs no passes at all |
 | `-v`, `--verbose` | Report each stage as it runs |
 | `-h`, `--help` | Usage |
 | `--version` | Version |
 
-Options belonging to stages that do not exist yet -- `-O`, `-g`, `-c` -- are refused with an explanation rather than accepted
-and ignored, so a build never quietly does something other than what was asked:
+Options belonging to stages that do not exist yet -- `-g`, `-c` -- are refused
+with an explanation rather than accepted and ignored, so a build never quietly
+does something other than what was asked:
 
 ```text
-$ ./build/donkey -O2 examples/sample.c
--O2: not supported yet: there is no optimiser yet
+$ ./build/donkey -g examples/sample.c
+-g: not supported yet: debug information is not generated yet
 ```
 
 The older form, `donkey input.c output.asm`, still works.

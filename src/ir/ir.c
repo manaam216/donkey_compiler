@@ -121,6 +121,25 @@ struct ir_value *ir_set_dst(struct ir_func *func, struct ir_instr *instr,
     return instr->dst;
 }
 
+void ir_unlink(struct ir_instr *instr)
+{
+    struct ir_block *block = instr->block;
+
+    if (instr->prev) {
+        instr->prev->next = instr->next;
+    } else if (block) {
+        block->first = instr->next;
+    }
+    if (instr->next) {
+        instr->next->prev = instr->prev;
+    } else if (block) {
+        block->last = instr->prev;
+    }
+    instr->prev = NULL;
+    instr->next = NULL;
+    instr->block = NULL;
+}
+
 void ir_remove(struct ir_instr *instr)
 {
     struct ir_block *block = instr->block;
@@ -146,6 +165,150 @@ void ir_remove(struct ir_instr *instr)
     instr->block = NULL;
     if (block) {
         block->dead = instr;
+    }
+}
+
+struct ir_instr *ir_emit_before(struct ir_instr *at, IROp op)
+{
+    struct ir_instr *instr = xcalloc(1, sizeof(*instr), "IR instruction");
+
+    instr->op = op;
+    instr->block = at->block;
+    instr->prev = at->prev;
+    instr->next = at;
+
+    if (at->prev) {
+        at->prev->next = instr;
+    } else if (at->block) {
+        at->block->first = instr;
+    }
+    at->prev = instr;
+    return instr;
+}
+
+int ir_replace_uses(struct ir_func *func, struct ir_value *from,
+    struct ir_value *to)
+{
+    struct ir_block *block;
+    int replaced = 0;
+
+    if (from == to) {
+        return 0;
+    }
+    for (block = func->entry; block; block = block->next) {
+        struct ir_instr *instr;
+
+        for (instr = block->first; instr; instr = instr->next) {
+            int i;
+
+            for (i = 0; i < instr->arg_count; i++) {
+                if (instr->args[i] == from) {
+                    instr->args[i] = to;
+                    replaced++;
+                }
+            }
+        }
+    }
+    return replaced;
+}
+
+void ir_count_uses(struct ir_func *func, int *counts)
+{
+    struct ir_block *block;
+    int i;
+
+    for (i = 0; i < func->value_count; i++) {
+        counts[i] = 0;
+    }
+    for (block = func->entry; block; block = block->next) {
+        struct ir_instr *instr;
+
+        for (instr = block->first; instr; instr = instr->next) {
+            for (i = 0; i < instr->arg_count; i++) {
+                if (instr->args[i]) {
+                    counts[instr->args[i]->id]++;
+                }
+            }
+        }
+    }
+}
+
+int ir_has_side_effects(struct ir_instr *instr)
+{
+    switch (instr->op) {
+        case IR_STORE:
+        case IR_MEMCPY:
+        case IR_CALL:
+        case IR_PARAM:
+            /*
+             * A parameter describes the function's interface rather than
+             * computing anything, so it stays even when the body ignores it.
+             */
+            return 1;
+        default:
+            return ir_is_terminator(instr->op);
+    }
+}
+
+int ir_is_pure(struct ir_instr *instr)
+{
+    if (ir_has_side_effects(instr) || !instr->dst) {
+        return 0;
+    }
+    switch (instr->op) {
+        case IR_LOAD:
+            /* Memory can change between two loads of the same address. */
+            return 0;
+        case IR_ALLOCA:
+            /* Two allocas are two distinct slots however alike they look. */
+            return 0;
+        case IR_PHI:
+            /*
+             * A phi's value depends on the edge control arrived along, so two
+             * phis are equal only if they are in the same block -- which the
+             * callers that care check for themselves.
+             */
+            return 0;
+        default:
+            return 1;
+    }
+}
+
+void ir_fix_phis(struct ir_func *func)
+{
+    struct ir_block *block;
+
+    for (block = func->entry; block; block = block->next) {
+        struct ir_instr *instr;
+
+        if (block->rpo_index < 0) {
+            continue;
+        }
+        for (instr = block->first; instr; instr = instr->next) {
+            int kept = 0;
+            int i;
+
+            if (instr->op != IR_PHI) {
+                break;          /* phis are all at the top of the block */
+            }
+            for (i = 0; i < instr->arg_count; i++) {
+                struct ir_block *from = instr->phi_blocks[i];
+                int p;
+
+                for (p = 0; p < block->pred_count; p++) {
+                    if (block->preds[p] == from) {
+                        break;
+                    }
+                }
+                if (p == block->pred_count) {
+                    continue;   /* the edge is gone, and so is its value */
+                }
+                instr->args[kept] = instr->args[i];
+                instr->phi_blocks[kept] = from;
+                kept++;
+            }
+            instr->arg_count = kept;
+        }
     }
 }
 

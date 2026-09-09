@@ -8,6 +8,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include "ir.h"
 
 static const char *op_names[IR_OP_COUNT] = {
@@ -32,6 +33,41 @@ const char *ir_op_name(IROp op)
     return op_names[op];
 }
 
+/*
+ * Format a 64-bit immediate.
+ *
+ * Not printf: the compiler is built with MinGW on Windows as well as with gcc
+ * on Linux, and MinGW's default C runtime does not understand %lld unless the
+ * build opts into its ANSI stdio. Rather than make the dump depend on a build
+ * flag -- and have the IR print differently depending on how the compiler
+ * itself was compiled -- the digits are produced here.
+ */
+static const char *format_imm(long long value, char *buffer, size_t size)
+{
+    char digits[24];
+    size_t count = 0;
+    size_t out = 0;
+    int negative = value < 0;
+    unsigned long long magnitude;
+
+    /* Negated as unsigned, so the most negative value does not overflow. */
+    magnitude = negative ? 0ULL - (unsigned long long)value
+                         : (unsigned long long)value;
+    do {
+        digits[count++] = (char)('0' + (magnitude % 10));
+        magnitude /= 10;
+    } while (magnitude > 0 && count < sizeof(digits));
+
+    if (negative && out + 1 < size) {
+        buffer[out++] = '-';
+    }
+    while (count > 0 && out + 1 < size) {
+        buffer[out++] = digits[--count];
+    }
+    buffer[out] = 0;
+    return buffer;
+}
+
 static void print_value(struct ir_value *value, FILE *output)
 {
     if (!value) {
@@ -53,6 +89,7 @@ static void print_block_name(struct ir_block *block, FILE *output)
 static void print_instr(struct ir_instr *instr, FILE *output)
 {
     char type_name[64];
+    char number[24];
     int i;
 
     fprintf(output, "    ");
@@ -67,7 +104,7 @@ static void print_instr(struct ir_instr *instr, FILE *output)
 
     switch (instr->op) {
         case IR_CONST:
-            fprintf(output, " %ld", instr->imm);
+            fprintf(output, " %s", format_imm(instr->imm, number, sizeof(number)));
             break;
         case IR_CONST_FP:
         case IR_STR:
@@ -90,11 +127,12 @@ static void print_instr(struct ir_instr *instr, FILE *output)
             }
             break;
         case IR_PARAM:
-            fprintf(output, " #%ld %s", instr->imm,
+            fprintf(output, " #%s %s",
+                format_imm(instr->imm, number, sizeof(number)),
                 instr->sym ? instr->sym->name : "?");
             break;
         case IR_MEMCPY:
-            fprintf(output, " %ld bytes", instr->imm);
+            fprintf(output, " %s bytes", format_imm(instr->imm, number, sizeof(number)));
             break;
         case IR_JMP:
             fprintf(output, " ");

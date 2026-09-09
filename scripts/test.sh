@@ -78,7 +78,7 @@ cflags="${CFLAGS:--Wall -Wextra -g}"
 
 # shellcheck disable=SC2086 # cflags is a deliberate word-split flag list
 "$cc" -Iinclude -Isrc/frontend -Isrc/analysis -Isrc/backend $cflags -o "$compiler" \
-    src/main.c src/frontend/lexer.c src/frontend/preprocess.c src/frontend/pp_macro.c src/frontend/pp_cond.c src/frontend/pp_include.c src/frontend/parser.c src/frontend/parser_decl.c src/frontend/parser_stmt.c src/frontend/parser_expr.c src/analysis/semantic.c src/analysis/sema_scope.c src/analysis/sema_resolve.c src/analysis/sema_type.c src/analysis/type.c src/analysis/symbol.c src/ir/ir.c src/ir/lower.c src/ir/cfg.c src/ir/dom.c src/ir/ssa.c src/ir/irdump.c src/ir/verify.c src/backend/codegen.c src/backend/codegen_emit.c src/backend/codegen_data.c src/backend/codegen_stmt.c src/backend/codegen_expr.c src/support/mem.c src/support/file.c src/support/diag.c src/support/cli.c src/support/dump.c
+    src/main.c src/frontend/lexer.c src/frontend/preprocess.c src/frontend/pp_macro.c src/frontend/pp_cond.c src/frontend/pp_include.c src/frontend/parser.c src/frontend/parser_decl.c src/frontend/parser_stmt.c src/frontend/parser_expr.c src/analysis/semantic.c src/analysis/sema_scope.c src/analysis/sema_resolve.c src/analysis/sema_type.c src/analysis/type.c src/analysis/symbol.c src/ir/ir.c src/ir/lower.c src/ir/cfg.c src/ir/dom.c src/ir/ssa.c src/ir/irdump.c src/ir/verify.c src/opt/opt.c src/opt/fold.c src/opt/simplify.c src/opt/dce.c src/opt/cse.c src/opt/licm.c src/backend/codegen.c src/backend/codegen_emit.c src/backend/codegen_data.c src/backend/codegen_stmt.c src/backend/codegen_expr.c src/support/mem.c src/support/file.c src/support/diag.c src/support/cli.c src/support/dump.c
 
 failures=0
 
@@ -110,7 +110,8 @@ run_unit() {
 run_unit test_type src/analysis/type.c src/support/mem.c
 run_unit test_lexer src/frontend/lexer.c src/support/diag.c src/support/mem.c src/support/file.c
 run_unit test_cli src/support/cli.c
-run_unit test_ir src/ir/ir.c src/ir/cfg.c src/ir/dom.c src/ir/ssa.c     src/ir/irdump.c src/ir/verify.c src/analysis/type.c src/support/mem.c
+run_unit test_ir src/ir/ir.c src/ir/cfg.c src/ir/dom.c src/ir/ssa.c src/ir/irdump.c src/ir/verify.c src/analysis/type.c src/support/mem.c
+run_unit test_opt src/ir/ir.c src/ir/lower.c src/ir/cfg.c src/ir/dom.c src/ir/ssa.c src/ir/irdump.c src/ir/verify.c src/opt/opt.c src/opt/fold.c src/opt/simplify.c src/opt/dce.c src/opt/cse.c src/opt/licm.c src/frontend/lexer.c src/frontend/parser.c src/frontend/parser_decl.c src/frontend/parser_stmt.c src/frontend/parser_expr.c src/analysis/semantic.c src/analysis/sema_scope.c src/analysis/sema_resolve.c src/analysis/sema_type.c src/analysis/type.c src/analysis/symbol.c src/support/mem.c src/support/file.c src/support/diag.c
 
 # Compare a produced file against its golden copy, or refresh the golden copy
 # when UPDATE_GOLDEN=1.
@@ -203,6 +204,29 @@ echo "  ok  every example lowers to verified IR"
 "$compiler" --dump-ssa examples/control_flow.c >"$build_dir/control_flow.ssa" 2>&1
 if check_golden "$build_dir/control_flow.ssa" tests/golden/control_flow.ssa     "control_flow.c SSA"; then
     echo "  ok  control_flow.c SSA matches its golden form"
+fi
+
+# The optimiser runs on every example at every level, and the verifier checks
+# each result. Whether the passes preserve what the program computes is a
+# different question, which test_opt answers by interpreting the IR before and
+# after; this is here to make sure no real program makes a pass fall over.
+for source in examples/*.c; do
+    for level in 1 2 3; do
+        if "$compiler" --dump-ssa "-O$level" "$source"             >"$build_dir/ir.txt" 2>"$build_dir/ir.err"; then
+            :
+        else
+            fail "-O$level $source"
+            head -10 "$build_dir/ir.err" >&2
+        fi
+    done
+done
+echo "  ok  every example optimises to verified IR at -O1, -O2 and -O3"
+
+# The optimised form of one program is kept, so a pass that changes what it
+# produces has to say so in a diff rather than in a number.
+"$compiler" --dump-ssa -O3 examples/control_flow.c     >"$build_dir/control_flow.O3.ssa" 2>&1
+if check_golden "$build_dir/control_flow.O3.ssa" tests/golden/control_flow.O3.ssa     "control_flow.c at -O3"; then
+    echo "  ok  control_flow.c at -O3 matches its golden form"
 fi
 
 echo "== negative tests =="
@@ -349,7 +373,7 @@ expect_rejected() {
     echo "  ok  $label"
 }
 
-expect_rejected "-O2 rejected" "there is no optimiser yet"     "$compiler" -O2 examples/sample.c
+expect_rejected "-Ofast rejected" "takes a level from 0 to 3"     "$compiler" -Ofast examples/sample.c
 expect_rejected "no input" "no input file" "$compiler"
 
 echo "== preprocessor =="

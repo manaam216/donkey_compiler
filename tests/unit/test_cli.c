@@ -109,10 +109,30 @@ static void test_roadmap_flags_are_rejected(void)
     int should_exit = 0;
     int status;
 
-    /* Rejected with an explanation rather than accepted and ignored. */
+    /* -O became a real level once there were passes behind it. */
     status = parse(&options, &should_exit, 2, (char *)"-O2", (char *)"main.c");
-    check_int("-O2 stops", should_exit, 1);
-    check_int("-O2 fails", status, EXIT_FAILURE);
+    check_int("-O2 continues", should_exit, 0);
+    check_int("-O2 succeeds", status, EXIT_SUCCESS);
+    check_int("-O2 selects level two", options.optimise, 2);
+
+    should_exit = 0;
+    parse(&options, &should_exit, 2, (char *)"main.c", (char *)"out.asm");
+    check_int("no -O means no passes at all", options.optimise, 0);
+
+    /*
+     * A level that does not exist is refused rather than rounded. "-Ofast" and
+     * "-Os" name policies this compiler does not have, and reading the 'f' as a
+     * level would be worse than saying so.
+     */
+    should_exit = 0;
+    status = parse(&options, &should_exit, 2, (char *)"-Ofast", (char *)"main.c");
+    check_int("-Ofast stops", should_exit, 1);
+    check_int("-Ofast fails", status, EXIT_FAILURE);
+
+    should_exit = 0;
+    status = parse(&options, &should_exit, 2, (char *)"-O9", (char *)"main.c");
+    check_int("-O9 stops", should_exit, 1);
+    check_int("-O9 fails", status, EXIT_FAILURE);
 
     /* -E, -I and -D became real once the preprocessor landed. */
     should_exit = 0;

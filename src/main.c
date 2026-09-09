@@ -9,6 +9,7 @@
 #include "cli.h"
 #include "preprocess.h"
 #include "ir.h"
+#include "opt.h"
 
 /*
  * Each stage reports everything it finds rather than stopping at the first
@@ -144,20 +145,34 @@ int main(int argc, char *argv[])
         ir_lower_program(&ir, ast);
 
         for (func = ir.first; func; func = func->next) {
+            struct opt_stats stats;
+
             ir_analyze_cfg(func);
             ir_compute_dominators(func);
             ir_compute_frontiers(func);
-            if (options.dump_ssa) {
-                ir_build_ssa(func);
+            if (!options.dump_ssa) {
+                continue;
+            }
 
-                /*
-                 * Promotion deletes blocks' worth of loads and stores and adds
-                 * phis, so the predecessor lists and the dominator tree are
-                 * rebuilt before anything reads them again.
-                 */
-                ir_analyze_cfg(func);
-                ir_compute_dominators(func);
-                ir_compute_frontiers(func);
+            ir_build_ssa(func);
+
+            /*
+             * Promotion deletes blocks' worth of loads and stores and adds
+             * phis, so the predecessor lists and the dominator tree are
+             * rebuilt before anything reads them again.
+             */
+            ir_analyze_cfg(func);
+            ir_compute_dominators(func);
+            ir_compute_frontiers(func);
+
+            /*
+             * The optimiser needs SSA, so -O has no effect on --dump-ir: what
+             * that prints is what lowering produced, which is the thing worth
+             * being able to look at unchanged.
+             */
+            opt_run(func, options.optimise, &stats, stderr);
+            if (options.verbose && options.optimise > 0) {
+                opt_report(&stats, func->name, stderr);
             }
         }
 

@@ -136,7 +136,7 @@ static void branch_to(struct lower_ctx *ctx, struct ir_value *condition,
     branch->else_block = else_block;
 }
 
-static struct ir_value *emit_const(struct lower_ctx *ctx, long value,
+static struct ir_value *emit_const(struct lower_ctx *ctx, long long value,
     struct Type *ty)
 {
     struct ir_instr *instr = ir_emit(ctx->block, IR_CONST);
@@ -578,7 +578,7 @@ static struct ir_value *lower_expr(struct lower_ctx *ctx, struct ast_node *node)
 
     switch (node->type) {
         case AST_INTLIT:
-            return emit_const(ctx, node->value ? strtol(node->value, NULL, 0) : 0,
+            return emit_const(ctx, node->value ? strtoll(node->value, NULL, 0) : 0,
                 node->ty ? node->ty : ty_int);
         case AST_FLOATLIT: {
             struct ir_instr *instr = ir_emit(ctx->block, IR_CONST_FP);
@@ -937,7 +937,7 @@ static void lower_switch(struct lower_ctx *ctx, struct ast_node *node)
         struct ir_block *body = new_block(ctx, NULL);
         struct ir_block *next_test = new_block(ctx, NULL);
         struct ir_value *label_value = emit_const(ctx,
-            cases[i]->value ? strtol(cases[i]->value, NULL, 0) : 0, ty_int);
+            cases[i]->value ? strtoll(cases[i]->value, NULL, 0) : 0, ty_int);
         struct ir_value *matches =
             emit_binary(ctx, IR_EQ, control, label_value, ty_int);
 

@@ -35,6 +35,7 @@ void cli_usage(const char *program, FILE *stream)
         "Options:\n"
         "  -o, --output <file>   Write assembly to <file> (default: output.asm)\n"
         "  -S                    Emit assembly; the only mode currently supported\n"
+        "  -O<0-3>               Optimise the IR; 0 is no passes at all\n"
         "  -Wall                 Enable all warnings (already the default)\n"
         "  -Werror               Treat warnings as errors\n"
         "  -w                    Suppress warnings\n"
@@ -60,7 +61,6 @@ static int reject_unimplemented(const char *argument)
         const char *prefix;
         const char *reason;
     } pending[] = {
-        { "-O", "there is no optimiser yet" },
         { "-g", "debug information is not generated yet" },
         { "-c", "Donkey emits assembly; it does not assemble or link" }
     };
@@ -111,7 +111,7 @@ int cli_parse(int argc, char *argv[], struct options *options, int *should_exit)
      */
     optind = 0;
 
-    while ((option = getopt_long(argc, argv, "o:I:D:ESW:whv", long_options, NULL)) != -1) {
+    while ((option = getopt_long(argc, argv, "o:I:D:O:ESW:whv", long_options, NULL)) != -1) {
         switch (option) {
             case 'o':
                 options->output = optarg;
@@ -152,6 +152,20 @@ int cli_parse(int argc, char *argv[], struct options *options, int *should_exit)
                 break;
             case 'w':
                 options->suppress_warnings = 1;
+                break;
+            case 'O':
+                /*
+                 * Only a digit in range. "-Ofast" and "-Os" name policies this
+                 * compiler does not have, and quietly reading the 'f' as a
+                 * level would be worse than saying so.
+                 */
+                if (!optarg || optarg[1] != '\0' ||
+                    optarg[0] < '0' || optarg[0] > '3') {
+                    fprintf(stderr, "%s: -O takes a level from 0 to 3\n", argv[0]);
+                    *should_exit = 1;
+                    return EXIT_FAILURE;
+                }
+                options->optimise = optarg[0] - '0';
                 break;
             case OPT_DUMP_TOKENS:
                 options->dump_tokens = 1;
