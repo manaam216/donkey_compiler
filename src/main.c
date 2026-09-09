@@ -145,8 +145,6 @@ int main(int argc, char *argv[])
         ir_lower_program(&ir, ast);
 
         for (func = ir.first; func; func = func->next) {
-            struct opt_stats stats;
-
             ir_analyze_cfg(func);
             ir_compute_dominators(func);
             ir_compute_frontiers(func);
@@ -164,15 +162,20 @@ int main(int argc, char *argv[])
             ir_analyze_cfg(func);
             ir_compute_dominators(func);
             ir_compute_frontiers(func);
+        }
 
-            /*
-             * The optimiser needs SSA, so -O has no effect on --dump-ir: what
-             * that prints is what lowering produced, which is the thing worth
-             * being able to look at unchanged.
-             */
-            opt_run(func, options.optimise, &stats, stderr);
+        /*
+         * The optimiser needs SSA, so -O has no effect on --dump-ir: what that
+         * prints is what lowering produced, which is the thing worth being able
+         * to look at unchanged. It runs over the whole program at once because
+         * inlining copies a body from one function into another.
+         */
+        if (options.dump_ssa) {
+            struct opt_stats stats;
+
+            opt_run_program(&ir, options.optimise, &stats, stderr);
             if (options.verbose && options.optimise > 0) {
-                opt_report(&stats, func->name, stderr);
+                opt_report(&stats, options.input, stderr);
             }
         }
 

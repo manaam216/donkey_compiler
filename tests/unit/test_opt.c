@@ -32,7 +32,9 @@
 #define MEMORY_BYTES 4096
 
 struct machine {
+    struct ir_program *program;
     struct ir_func *func;
+    int depth;
     long long *values;          /* one per value id */
     char *memory;               /* backing for whatever stayed in a slot */
     int next_offset;
@@ -98,8 +100,39 @@ static long long apply(struct machine *m, IROp op, long long a, long long b,
  * an unsupported instruction, a trap, or a step limit that a miscompiled loop
  * would otherwise spin in forever.
  */
-static int run(struct ir_func *func, const long long *args, int arg_count,
-    long long *result)
+static int run_depth(struct ir_program *program, struct ir_func *func,
+    const long long *args, int arg_count, long long *result, int depth);
+
+/* The function a direct call names, so the interpreter can step into it. */
+static struct ir_func *callee_of(struct ir_program *program,
+    struct ir_instr *call)
+{
+    struct ir_instr *global;
+    struct ir_func *func;
+
+    if (call->arg_count < 1 || !call->args[0] || !call->args[0]->def) {
+        return NULL;
+    }
+    global = call->args[0]->def;
+    if (global->op != IR_GLOBAL) {
+        return NULL;
+    }
+    for (func = program->first; func; func = func->next) {
+        if (global->sym && func->sym) {
+            if (global->sym == func->sym) {
+                return func;
+            }
+            continue;
+        }
+        if (global->text && strcmp(global->text, func->name) == 0) {
+            return func;
+        }
+    }
+    return NULL;
+}
+
+static int run_depth(struct ir_program *program, struct ir_func *func,
+    const long long *args, int arg_count, long long *result, int depth)
 {
     struct machine m;
     struct ir_block *block = func->entry;
@@ -107,7 +140,16 @@ static int run(struct ir_func *func, const long long *args, int arg_count,
     int ok = 1;
 
     memset(&m, 0, sizeof(m));
+    m.program = program;
     m.func = func;
+    m.depth = depth;
+    /*
+     * Deep enough for the recursion the cases use, shallow enough that an
+     * unoptimised tail-recursive run cannot take the host's stack with it.
+     */
+    if (depth > 2000) {
+        return 0;
+    }
     m.values = calloc((size_t)func->value_count + 1, sizeof(*m.values));
     m.memory = calloc(MEMORY_BYTES, 1);
     if (!m.values || !m.memory) {
@@ -208,6 +250,31 @@ static int run(struct ir_func *func, const long long *args, int arg_count,
                     break;
                 case IR_PHI:
                     break;              /* already committed, all at once */
+                case IR_CALL: {
+                    struct ir_func *target = callee_of(program, instr);
+                    long long call_args[8];
+                    long long returned = 0;
+                    int n = instr->arg_count - 1;
+                    int c;
+
+                    if (!target || n > 8) {
+                        ok = 0;
+                        break;
+                    }
+                    for (c = 0; c < n; c++) {
+                        call_args[c] = read_value(&m, instr->args[c + 1]);
+                    }
+                    if (!run_depth(program, target, call_args, n, &returned,
+                            depth + 1)) {
+                        ok = 0;
+                        break;
+                    }
+                    if (instr->dst) {
+                        m.values[instr->dst->id] =
+                            truncate_to(returned, instr->dst->ty);
+                    }
+                    break;
+                }
                 case IR_JMP:
                     next = instr->target;
                     break;
@@ -242,6 +309,12 @@ static int run(struct ir_func *func, const long long *args, int arg_count,
     return 0;
 }
 
+static int run(struct ir_program *program, struct ir_func *func,
+    const long long *args, int arg_count, long long *result)
+{
+    return run_depth(program, func, args, arg_count, result, 0);
+}
+
 /*
  * Compile one function's source into SSA, optionally optimised. Everything the
  * front end allocates is left for the caller's cleanup, which is the whole
@@ -272,8 +345,6 @@ static struct ir_func *build(const char *source, struct ir_program *program,
 
     ir_lower_program(program, ast);
     for (func = program->first; func; func = func->next) {
-        struct opt_stats stats;
-
         ir_analyze_cfg(func);
         ir_compute_dominators(func);
         ir_compute_frontiers(func);
@@ -281,7 +352,24 @@ static struct ir_func *build(const char *source, struct ir_program *program,
         ir_analyze_cfg(func);
         ir_compute_dominators(func);
         ir_compute_frontiers(func);
-        opt_run(func, level, &stats, NULL);
+    }
+
+    /*
+     * Whole-program, so inlining can copy one of these functions into another.
+     * The cases with helpers depend on it, and running per function would make
+     * that pass untestable here.
+     */
+    {
+        struct opt_stats stats;
+
+        opt_run_program(program, level, &stats, NULL);
+    }
+
+    /* The case under test is always called f; the rest are what it calls. */
+    for (func = program->first; func; func = func->next) {
+        if (strcmp(func->name, "f") == 0) {
+            return func;
+        }
     }
     return program->first;
 }
@@ -309,11 +397,13 @@ static void check_same(const char *label, const char *source,
         char message[160];
 
         a = build(source, &plain, 0);
-        ran_plain = a && run(a, &args[i * arg_count], arg_count, &expected);
+        ran_plain = a && run(&plain, a, &args[i * arg_count], arg_count,
+            &expected);
         ir_program_free(&plain);
 
         b = build(source, &optimised, 3);
-        ran_optimised = b && run(b, &args[i * arg_count], arg_count, &actual);
+        ran_optimised = b && run(&optimised, b, &args[i * arg_count],
+            arg_count, &actual);
         ir_program_free(&optimised);
 
         if (!ran_plain || !ran_optimised) {
@@ -404,6 +494,44 @@ static int count_phis(const char *source, int level)
             for (instr = block->first; instr && instr->op == IR_PHI;
                  instr = instr->next) {
                 count++;
+            }
+        }
+    }
+    ir_program_free(&program);
+    return count;
+}
+
+/*
+ * How many of one opcode a named function contains, at a given level. The name
+ * matters for the recursion cases: what has to disappear is the call inside the
+ * recursive function, not the one that starts it off.
+ */
+static int count_op_in(const char *source, int level, const char *name, IROp op)
+{
+    struct ir_program program;
+    struct ir_func *func;
+    int count = 0;
+
+    build(source, &program, level);
+    for (func = program.first; func; func = func->next) {
+        if (strcmp(func->name, name) == 0) {
+            break;
+        }
+    }
+
+    if (func) {
+        struct ir_block *block;
+
+        for (block = func->entry; block; block = block->next) {
+            struct ir_instr *instr;
+
+            if (block->rpo_index < 0) {
+                continue;
+            }
+            for (instr = block->first; instr; instr = instr->next) {
+                if (instr->op == op) {
+                    count++;
+                }
             }
         }
     }
@@ -571,6 +699,63 @@ int main(void)
         "  return r;"
         "}";
 
+    /*
+     * Helpers to copy into f. Small enough to inline, and arranged so that
+     * doing so exposes work: once `scale` is copied in, its multiply has a
+     * constant on one side.
+     */
+    static const char inlining[] =
+        "int scale(int v, int by) { return v * by; }"
+        "int clamp(int v) { if (v > 100) return 100; return v; }"
+        "int f(int a, int b) {"
+        "  return clamp(scale(a, 4)) + clamp(scale(b, 2)) + scale(3, 3);"
+        "}";
+
+    /*
+     * A callee that returns from two places. Both returns have to meet in a phi
+     * at the point the call resumed, and picking the wrong one is a wrong
+     * answer rather than a malformed function.
+     */
+    static const char inlining_branches[] =
+        "int pick(int v, int w) { if (v > w) return v - w; return w - v; }"
+        "int f(int a, int b) { return pick(a, b) + pick(b, a) + pick(a, a); }";
+
+    /*
+     * Tail recursion, which becomes a loop. The unoptimised side really does
+     * recurse, so the two agree only if the loop carries the accumulator the
+     * same way the recursion did.
+     */
+    static const char tail_recursion[] =
+        "int down(int n, int acc) {"
+        "  if (n <= 0) return acc;"
+        "  return down(n - 1, acc + n);"
+        "}"
+        "int f(int a, int b) { return down(a, b); }";
+
+    /*
+     * A recursive call that is not in tail position: the multiply happens after
+     * it comes back, so turning it into a jump would skip the work. It must be
+     * left alone.
+     */
+    static const char not_tail[] =
+        "int power(int base, int n) {"
+        "  if (n <= 0) return 1;"
+        "  return base * power(base, n - 1);"
+        "}"
+        "int f(int a, int b) { return power(a, 3) + power(2, b); }";
+
+    /*
+     * A variadic callee, which must not be copied. Lowering gives the ellipsis
+     * a parameter of its own, so a call that passes a different number of
+     * arguments than the callee has parameters is how one is recognised without
+     * anything having to record that it was variadic. The second call passes
+     * fewer, which is the direction that reads past the argument list if the
+     * check is not made.
+     */
+    static const char variadic[] =
+        "int first(int a, ...) { return a; }"
+        "int f(int a, int b) { return first(a, b, 7) + first(b); }";
+
     int pairs = (int)(sizeof(two_args) / sizeof(two_args[0])) / 2;
 
     /* Results here are numbers, so the shared string check goes unused. */
@@ -591,6 +776,11 @@ int main(void)
     check_same("signed division", signed_division, two_args, 2, pairs);
     check_same("trapping", trapping, two_args, 2, pairs);
     check_same("selection", selection, two_args, 2, pairs);
+    check_same("inlining", inlining, two_args, 2, pairs);
+    check_same("inlining branches", inlining_branches, two_args, 2, pairs);
+    check_same("tail recursion", tail_recursion, two_args, 2, pairs);
+    check_same("not tail", not_tail, two_args, 2, pairs);
+    check_same("variadic", variadic, two_args, 2, pairs);
 
     check_shrinks("arithmetic", arithmetic);
     check_shrinks("constants", constants);
@@ -599,6 +789,31 @@ int main(void)
     check_shrinks("loop", loop);
     check_shrinks("redundant", redundant);
     check_shrinks("selection", selection);
+
+    /*
+     * Inlining is the one pass that makes a function bigger, so check_shrinks
+     * is the wrong question for it. What has to be true is that the calls went
+     * away.
+     */
+    check_int("inlining: no call is left in f",
+        count_op_in(inlining, 3, "f", IR_CALL), 0);
+    check_int("inlining branches: no call is left in f",
+        count_op_in(inlining_branches, 3, "f", IR_CALL), 0);
+
+    /*
+     * The recursion must actually be gone, not merely still correct: a program
+     * that still calls itself has not been optimised at all. And the call that
+     * is not in tail position has to stay, since the work after it would
+     * otherwise be skipped.
+     */
+    check_int("tail recursion: down no longer calls itself",
+        count_op_in(tail_recursion, 3, "down", IR_CALL), 0);
+    check_int("tail recursion: down becomes a loop",
+        count_op_in(tail_recursion, 3, "down", IR_PHI) > 0, 1);
+    check_int("not tail: power keeps its call",
+        count_op_in(not_tail, 3, "power", IR_CALL) > 0, 1);
+    check_int("variadic: the calls are not inlined",
+        count_op_in(variadic, 3, "f", IR_CALL), 2);
 
     /*
      * Exactly one phi should survive -- the loop counter, which really does

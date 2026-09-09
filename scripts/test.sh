@@ -78,7 +78,7 @@ cflags="${CFLAGS:--Wall -Wextra -g}"
 
 # shellcheck disable=SC2086 # cflags is a deliberate word-split flag list
 "$cc" -Iinclude -Isrc/frontend -Isrc/analysis -Isrc/backend $cflags -o "$compiler" \
-    src/main.c src/frontend/lexer.c src/frontend/preprocess.c src/frontend/pp_macro.c src/frontend/pp_cond.c src/frontend/pp_include.c src/frontend/parser.c src/frontend/parser_decl.c src/frontend/parser_stmt.c src/frontend/parser_expr.c src/analysis/semantic.c src/analysis/sema_scope.c src/analysis/sema_resolve.c src/analysis/sema_type.c src/analysis/type.c src/analysis/symbol.c src/ir/ir.c src/ir/lower.c src/ir/cfg.c src/ir/dom.c src/ir/ssa.c src/ir/irdump.c src/ir/verify.c src/opt/opt.c src/opt/fold.c src/opt/simplify.c src/opt/dce.c src/opt/cse.c src/opt/licm.c src/backend/codegen.c src/backend/codegen_emit.c src/backend/codegen_data.c src/backend/codegen_stmt.c src/backend/codegen_expr.c src/support/mem.c src/support/file.c src/support/diag.c src/support/cli.c src/support/dump.c
+    src/main.c src/frontend/lexer.c src/frontend/preprocess.c src/frontend/pp_macro.c src/frontend/pp_cond.c src/frontend/pp_include.c src/frontend/parser.c src/frontend/parser_decl.c src/frontend/parser_stmt.c src/frontend/parser_expr.c src/analysis/semantic.c src/analysis/sema_scope.c src/analysis/sema_resolve.c src/analysis/sema_type.c src/analysis/type.c src/analysis/symbol.c src/ir/ir.c src/ir/lower.c src/ir/cfg.c src/ir/dom.c src/ir/ssa.c src/ir/irdump.c src/ir/verify.c src/opt/opt.c src/opt/fold.c src/opt/simplify.c src/opt/dce.c src/opt/cse.c src/opt/licm.c src/opt/inline.c src/opt/tailcall.c src/backend/codegen.c src/backend/codegen_emit.c src/backend/codegen_data.c src/backend/codegen_stmt.c src/backend/codegen_expr.c src/support/mem.c src/support/file.c src/support/diag.c src/support/cli.c src/support/dump.c
 
 failures=0
 
@@ -111,7 +111,7 @@ run_unit test_type src/analysis/type.c src/support/mem.c
 run_unit test_lexer src/frontend/lexer.c src/support/diag.c src/support/mem.c src/support/file.c
 run_unit test_cli src/support/cli.c
 run_unit test_ir src/ir/ir.c src/ir/cfg.c src/ir/dom.c src/ir/ssa.c src/ir/irdump.c src/ir/verify.c src/analysis/type.c src/support/mem.c
-run_unit test_opt src/ir/ir.c src/ir/lower.c src/ir/cfg.c src/ir/dom.c src/ir/ssa.c src/ir/irdump.c src/ir/verify.c src/opt/opt.c src/opt/fold.c src/opt/simplify.c src/opt/dce.c src/opt/cse.c src/opt/licm.c src/frontend/lexer.c src/frontend/parser.c src/frontend/parser_decl.c src/frontend/parser_stmt.c src/frontend/parser_expr.c src/analysis/semantic.c src/analysis/sema_scope.c src/analysis/sema_resolve.c src/analysis/sema_type.c src/analysis/type.c src/analysis/symbol.c src/support/mem.c src/support/file.c src/support/diag.c
+run_unit test_opt src/ir/ir.c src/ir/lower.c src/ir/cfg.c src/ir/dom.c src/ir/ssa.c src/ir/irdump.c src/ir/verify.c src/opt/opt.c src/opt/fold.c src/opt/simplify.c src/opt/dce.c src/opt/cse.c src/opt/licm.c src/opt/inline.c src/opt/tailcall.c src/frontend/lexer.c src/frontend/parser.c src/frontend/parser_decl.c src/frontend/parser_stmt.c src/frontend/parser_expr.c src/analysis/semantic.c src/analysis/sema_scope.c src/analysis/sema_resolve.c src/analysis/sema_type.c src/analysis/type.c src/analysis/symbol.c src/support/mem.c src/support/file.c src/support/diag.c
 
 # Compare a produced file against its golden copy, or refresh the golden copy
 # when UPDATE_GOLDEN=1.

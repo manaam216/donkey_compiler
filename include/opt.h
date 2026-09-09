@@ -32,6 +32,8 @@ struct opt_stats {
     int copies;                 /* copies and trivial phis propagated away */
     int cse;                    /* redundant computations removed */
     int hoisted;                /* loop-invariant instructions moved out */
+    int inlined;                /* calls replaced by a copy of the callee */
+    int tails;                  /* self-recursive tail calls turned into a loop */
     int dead;                   /* instructions removed as unused */
     int passes;                 /* how many times the pipeline went round */
 };
@@ -43,6 +45,15 @@ struct opt_stats {
  */
 void opt_run(struct ir_func *func, int level, struct opt_stats *stats,
     FILE *verify_output);
+
+/*
+ * Optimise a whole program. Inlining is the reason this exists: it is the one
+ * pass that needs to see more than one function, because it copies a body from
+ * one into another. Everything else runs per function afterwards, on the IR
+ * that inlining exposed.
+ */
+void opt_run_program(struct ir_program *program, int level,
+    struct opt_stats *stats, FILE *verify_output);
 
 void opt_report(const struct opt_stats *stats, const char *name, FILE *output);
 
@@ -82,5 +93,18 @@ int opt_cse(struct ir_func *func);
  * a trap the original program never had.
  */
 int opt_licm(struct ir_func *func);
+
+/*
+ * Replace calls with a copy of the callee. Whole-program, and the only pass
+ * that adds instructions rather than removing them -- what it buys is what the
+ * other passes can then see, so it runs before them and they run again after.
+ */
+int opt_inline(struct ir_program *program, int level);
+
+/*
+ * Turn a function's calls to itself in tail position into a loop. Needs the
+ * CFG to be current, and changes it.
+ */
+int opt_tail_calls(struct ir_func *func);
 
 #endif

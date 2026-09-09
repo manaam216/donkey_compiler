@@ -50,7 +50,9 @@ integer-returning functions.
 |   |   |-- simplify.c     Branch straightening and block merging
 |   |   |-- dce.c          Dead code and copy propagation
 |   |   |-- cse.c          Global value numbering
-|   |   `-- licm.c         Loop-invariant code motion
+|   |   |-- licm.c         Loop-invariant code motion
+|   |   |-- inline.c       Copying a callee into its caller
+|   |   `-- tailcall.c     Self-recursion becomes a loop
 |   |-- backend/      Syntax tree to assembly
 |   |   |-- codegen.c      Emitter context, prologue, entry point
 |   |   |-- codegen_emit.c The instruction layer
@@ -203,7 +205,7 @@ Run `./build/donkey --help` for the full list. The options that exist are:
 | `--dump-ast` | Print the annotated syntax tree and stop |
 | `--dump-ir` | Print the IR as lowered, with locals still in memory, and stop |
 | `--dump-ssa` | Print the IR in SSA form, with phis, and stop |
-| `-O<0-3>` | Optimise the IR; `-O0` runs no passes at all |
+| `-O<0-3>` | Optimise the IR; `-O0` runs no passes at all, `-O2` adds inlining, `-O3` adds code motion |
 | `-v`, `--verbose` | Report each stage as it runs |
 | `-h`, `--help` | Usage |
 | `--version` | Version |

@@ -91,6 +91,17 @@ void opt_run(struct ir_func *func, int level, struct opt_stats *stats,
             changed += count;
         }
 
+        /*
+         * After the others. Tail call elimination needs the frame slots gone,
+         * and they are gone only once promotion and dead code removal have had
+         * a turn -- so on the first round there is usually nothing to match,
+         * and on the second there is.
+         */
+        refresh(func);
+        count = opt_tail_calls(func);
+        stats->tails += count;
+        changed += count;
+
         /* Leaves the CFG and the phis consistent, so nothing follows it. */
         count = opt_simplify_cfg(func);
         stats->cfg += count;
@@ -100,9 +111,17 @@ void opt_run(struct ir_func *func, int level, struct opt_stats *stats,
          * Checked every round rather than once at the end, so a pass that
          * breaks an invariant is caught while it is still obvious which round
          * it happened in.
+         *
+         * Refreshed first. The check that a definition dominates its use reads
+         * the dominator tree, and the passes above have just moved blocks
+         * around -- so without this the verifier would be answering a question
+         * about the shape the function used to have.
          */
-        if (verify_output && ir_verify(func, verify_output) > 0) {
-            return;
+        if (verify_output) {
+            refresh(func);
+            if (ir_verify(func, verify_output) > 0) {
+                return;
+            }
         }
 
         if (!changed) {
@@ -118,11 +137,47 @@ void opt_run(struct ir_func *func, int level, struct opt_stats *stats,
     refresh(func);
 }
 
+/*
+ * Inlining first, then everything else on what it exposed. It runs once rather
+ * than in the round loop: it is the only pass that makes the program bigger,
+ * and letting it back in every round would let a chain of small callees grow
+ * without a bound that is easy to reason about.
+ */
+void opt_run_program(struct ir_program *program, int level,
+    struct opt_stats *stats, FILE *verify_output)
+{
+    struct ir_func *func;
+
+    memset(stats, 0, sizeof(*stats));
+    if (level <= 0) {
+        return;
+    }
+
+    stats->inlined = opt_inline(program, level);
+
+    for (func = program->first; func; func = func->next) {
+        struct opt_stats one;
+
+        opt_run(func, level, &one, verify_output);
+
+        stats->folded += one.folded;
+        stats->cfg += one.cfg;
+        stats->copies += one.copies;
+        stats->cse += one.cse;
+        stats->hoisted += one.hoisted;
+        stats->dead += one.dead;
+        stats->tails += one.tails;
+        if (one.passes > stats->passes) {
+            stats->passes = one.passes;
+        }
+    }
+}
+
 void opt_report(const struct opt_stats *stats, const char *name, FILE *output)
 {
     fprintf(output,
-        "%s: %d round(s); folded %d, copies %d, cse %d, hoisted %d, "
-        "dead %d, cfg %d\n",
-        name, stats->passes, stats->folded, stats->copies,
-        stats->cse, stats->hoisted, stats->dead, stats->cfg);
+        "%s: %d round(s); inlined %d, tails %d, folded %d, copies %d, "
+        "cse %d, hoisted %d, dead %d, cfg %d\n",
+        name, stats->passes, stats->inlined, stats->tails, stats->folded,
+        stats->copies, stats->cse, stats->hoisted, stats->dead, stats->cfg);
 }
